@@ -43,6 +43,8 @@ python manage.py runserver 127.0.0.1:8000
 
 ### 2.配置大模型API-Key
 
+创建一个 .env 文件，将 .env.example 文件的内容全部复制过来，然后进行 API-key 和 SMTP 的配置
+
 > 接入大模型是为了解析我们复制过去的通知，将其转化为格式化的数据
 
 在 `campus_notify\.env` 里填：
@@ -56,7 +58,8 @@ LLM_MODEL=deepseek-chat
 
 例如：
 
-<img src="C:\Users\33408\AppData\Roaming\Typora\typora-user-images\image-20261010121306187.png" alt="image-20261010121306187" style="zoom:45%;" />
+<img width="1244" height="503" alt="image" src="https://github.com/user-attachments/assets/6f7708af-469a-46b3-bbb6-840c42b1a73e" />
+
 
 ### 3.配置SMTP服务
 
@@ -77,7 +80,8 @@ DEFAULT_FROM_EMAIL=校园通知助手 <你的QQ号@qq.com>
 
 例如：
 
-<img src="C:\Users\33408\AppData\Roaming\Typora\typora-user-images\image-20261010121652182.png" alt="image-20261010121652182" style="zoom:50%;" />
+<img width="2020" height="787" alt="image" src="https://github.com/user-attachments/assets/7d884c2c-ce08-4916-aff4-9b0283ae9436" />
+
 
 SMTP授权码获取可以参考这个视频[QQ获取SMTP授权码_哔哩哔哩_bilibili](https://www.bilibili.com/video/BV1nyNB6sELN/?spm_id_from=333.337.search-card.all.click&vd_source=5dead84e1ffb02f1ce68028fdfd527f8)
 
