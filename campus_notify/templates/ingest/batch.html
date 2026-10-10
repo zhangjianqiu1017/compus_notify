@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}导入批次 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ batch.get_source_display }}</h1>
+    <p class="sub">{{ batch.created_at|date:"Y-m-d H:i" }}{% if batch.note %} · {{ batch.note }}{% endif %}</p>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="{% url 'ingest:import' %}">再导入一条</a>
+  </div>
+</div>
+
+{% if batch.stats %}
+<div class="card">
+  <div class="stat-row">
+    <div class="stat"><div class="num">{{ batch.stats.messages }}</div><div class="label">消息</div></div>
+    <div class="stat"><div class="num">{{ batch.stats.events }}</div><div class="label">事项</div></div>
+    <div class="stat"><div class="num">{{ batch.stats.merged }}</div><div class="label">自动归并</div></div>
+    <div class="stat"><div class="num">{{ batch.stats.ignored }}</div><div class="label">判为闲聊</div></div>
+    <div class="stat"><div class="num">{{ batch.stats.duration_ms }}ms</div><div class="label">耗时</div></div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>原文</h3>
+  {% for message in messages %}
+    <div style="margin-bottom:14px;">
+      <div class="list-item-head" style="margin-bottom:6px;">
+        {% if message.sender %}<span class="meta">{{ message.sender }}</span>{% endif %}
+        {% if message.sent_at %}<span class="meta">{{ message.sent_at|date:"m-d H:i" }}</span>{% endif %}
+        {% if message.has_sensitive %}<span class="tag warn">含{{ message.sensitive_kinds }}</span>{% endif %}
+        {% if message.raw_discarded %}<span class="tag muted">原文已丢弃</span>{% endif %}
+      </div>
+      <div class="raw-text">{{ message.display_text }}</div>
+    </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h3>本次产生的事项</h3>
+  <ul class="list-plain">
+    {% for event in events %}
+      <li>
+        <div class="list-item-head">
+          <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+          {% if event.status == "draft" %}<span class="tag warn">待确认</span>{% endif %}
+        </div>
+      </li>
+    {% empty %}
+      <li class="muted small">暂无</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}手动新建事项 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>手动新建</h1>
+    <p class="sub">识别失败或通知无法复制时，直接录入。</p>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="{% url 'ingest:import' %}">粘贴导入</a>
+  </div>
+</div>
+
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="msg msg-error">{{ form.non_field_errors }}</div>{% endif %}
+
+    <div class="field">
+      <label for="{{ form.title.id_for_label }}">事件名 *</label>
+      {{ form.title }}
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label for="{{ form.category.id_for_label }}">分类</label>
+        {{ form.category }}
+      </div>
+      <div class="field">
+        <label for="{{ form.course.id_for_label }}">课程</label>
+        {{ form.course }}
+      </div>
+      <div class="field">
+        <label for="{{ form.location.id_for_label }}">地点</label>
+        {{ form.location }}
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label for="{{ form.deadline.id_for_label }}">截止时间</label>
+        {{ form.deadline }}
+      </div>
+      <div class="field">
+        <label for="{{ form.start_at.id_for_label }}">开始时间</label>
+        {{ form.start_at }}
+      </div>
+      <div class="field">
+        <label for="{{ form.end_at.id_for_label }}">结束时间</label>
+        {{ form.end_at }}
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label for="{{ form.link.id_for_label }}">链接</label>
+        {{ form.link }}
+      </div>
+      <div class="field">
+        <label for="{{ form.contact.id_for_label }}">联系人</label>
+        {{ form.contact }}
+      </div>
+      <div class="field">
+        <label for="{{ form.organizer.id_for_label }}">主办方</label>
+        {{ form.organizer }}
+      </div>
+    </div>
+    <div class="field">
+      <label for="{{ form.requirement.id_for_label }}">要求 / 材料</label>
+      {{ form.requirement }}
+    </div>
+
+    <h3>保存方式</h3>
+    <div class="radio-row">
+      <label>{{ form.save_as_todo }} <span>作为待办</span></label>
+      <label>{{ form.save_as_calendar }} <span>作为日程</span></label>
+    </div>
+
+    <h3>提醒</h3>
+    <div class="checkbox-grid">
+      {% for checkbox in form.reminder_offsets %}
+        <label>{{ checkbox.tag }} {{ checkbox.choice_label }}</label>
+      {% endfor %}
+    </div>
+
+    <div class="btn-row" style="margin-top:16px;">
+      <button type="submit" class="btn">创建事项</button>
+      <a class="btn ghost" href="{% url 'ingest:import' %}">返回导入</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

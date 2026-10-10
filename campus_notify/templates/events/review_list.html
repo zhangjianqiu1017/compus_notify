@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}待确认 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>待确认</h1>
+    <p class="sub">确认后才会进入待办和日程</p>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="{% url 'ingest:import' %}">导入通知</a>
+  </div>
+</div>
+
+{% for event in events %}
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="strong">{{ event.title }}</div>
+        <div class="small muted" style="margin-top:2px;">
+          <span class="tag muted">{{ event.get_category_display }}</span>
+          {% if event.deadline %}截止 {{ event.deadline|date:"m-d H:i" }}{% endif %}
+          {% if event.start_at %}开始 {{ event.start_at|date:"m-d H:i" }}{% endif %}
+          {% if event.location %}· {{ event.location }}{% endif %}
+        </div>
+        {% if event.review_note %}<div class="small" style="color:var(--warn)">{{ event.review_note }}</div>{% endif %}
+      </div>
+      <div class="btn-row">
+        <a class="btn" href="{% url 'events:review' event.pk %}">去确认</a>
+        <a class="btn ghost" href="{% url 'events:detail' event.pk %}">详情</a>
+        <form method="post" action="{% url 'events:delete' event.pk %}">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit" class="btn danger-ghost" data-confirm="删除《{{ event.title }}》？">删除</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% empty %}
+  <div class="card">
+    <div class="empty">
+      <p>没有待确认的事项</p>
+      <a class="btn" href="{% url 'ingest:import' %}">导入一条通知</a>
+    </div>
+  </div>
+{% endfor %}
+{% endblock %}

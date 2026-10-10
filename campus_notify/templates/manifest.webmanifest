@@ -1,0 +1,28 @@
+{
+  "name": "校园通知助手",
+  "short_name": "通知助手",
+  "description": "把群里的校园通知整理成待办与日程",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#2f6fed",
+  "icons": [
+    {
+      "src": "/static/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "/ingest/share/",
+    "method": "POST",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}

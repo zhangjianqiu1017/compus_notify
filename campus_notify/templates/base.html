@@ -1,0 +1,69 @@
+{% load static %}<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v={{ static_version }}">
+  <link rel="manifest" href="{% url 'core:manifest' %}">
+  <link rel="icon" href="{% static 'icons/icon.svg' %}?v={{ static_version }}" type="image/svg+xml">
+</head>
+<body>
+{% if user.is_authenticated %}
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="{% url 'core:home' %}">
+      <svg width="20" height="20" viewBox="0 0 192 192" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#2f6fed"/>
+        <path d="M48 58h96v14H48zM48 88h96v14H48zM48 118h60v14H48z" fill="#fff"/>
+        <circle cx="140" cy="126" r="22" fill="#fff"/>
+        <path d="M132 126l6 7 12-14" stroke="#2f6fed" stroke-width="6" fill="none"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      {{ app_name }}
+    </a>
+    <nav class="nav">
+      <a href="{% url 'core:home' %}" {% if request.resolver_match.view_name == 'core:home' %}class="active"{% endif %}>首页</a>
+      <a href="{% url 'ingest:import' %}" {% if request.resolver_match.namespace == 'ingest' %}class="active"{% endif %}>导入</a>
+      <a href="{% url 'events:todo' %}" {% if request.resolver_match.view_name == 'events:todo' %}class="active"{% endif %}>待办</a>
+      <a href="{% url 'events:calendar' %}" {% if request.resolver_match.view_name == 'events:calendar' %}class="active"{% endif %}>日程</a>
+      <a href="{% url 'events:list' %}" {% if request.resolver_match.view_name == 'events:list' %}class="active"{% endif %}>事项</a>
+      <a href="{% url 'core:search' %}" {% if request.resolver_match.view_name == 'core:search' %}class="active"{% endif %}>搜索</a>
+      <a href="{% url 'reminders:list' %}" {% if request.resolver_match.namespace == 'reminders' %}class="active"{% endif %}>
+        提醒<span class="badge" data-reminder-poll {% if not unread_notifications %}style="display:none"{% endif %}>{{ unread_notifications }}</span>
+      </a>
+      <span class="divider" aria-hidden="true"></span>
+      <a href="{% url 'accounts:profile' %}" {% if request.resolver_match.namespace == 'accounts' %}class="active"{% endif %}>{{ user.username }}</a>
+      <form method="post" action="{% url 'accounts:logout' %}" class="inline-form">
+        {% csrf_token %}
+        <button type="submit" class="link-button">退出</button>
+      </form>
+    </nav>
+  </div>
+</header>
+{% endif %}
+
+<main class="container">
+  {% if messages %}
+    <ul class="messages">
+      {% for message in messages %}
+        <li class="msg msg-{{ message.tags }}">{{ message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% block content %}{% endblock %}
+</main>
+
+{% if user.is_authenticated %}
+<footer class="footer">
+  <a href="{% url 'core:privacy' %}">隐私说明</a>
+  <a href="{% url 'core:data' %}">我的数据</a>
+</footer>
+{% endif %}
+
+<script src="{% static 'js/app.js' %}?v={{ static_version }}" defer></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

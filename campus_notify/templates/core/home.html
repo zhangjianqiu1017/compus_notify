@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>今天要处理的事</h1>
+    <p class="sub">{{ now|date:"n 月 j 日 l" }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'ingest:import' %}">导入通知</a>
+    <a class="btn ghost" href="{% url 'events:create' %}">手动新建</a>
+  </div>
+</div>
+
+{% if draft_count %}
+<div class="msg msg-warning">
+  <span>{{ draft_count }} 条识别结果待确认。<a href="{% url 'events:review_list' %}">去确认 →</a></span>
+</div>
+{% endif %}
+
+{% if overdue_todos %}
+<div class="card" style="border-color:#f5d2cf;background:#fffafa;">
+  <h3>已过截止时间</h3>
+  <ul class="list-plain">
+    {% for event in overdue_todos %}
+      <li>
+        <div class="list-item-head">
+          <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+          <span class="overdue small">{{ event.deadline|date:"m-d H:i" }}</span>
+          <form method="post" action="{% url 'events:complete' event.pk %}" style="margin-left:auto;">
+            {% csrf_token %}<input type="hidden" name="next" value="/">
+            <button class="btn ghost small" type="submit">完成</button>
+          </form>
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-header">
+      <h3>未来 {{ days }} 天的截止</h3>
+      <a class="small" href="{% url 'events:todo' %}">全部待办</a>
+    </div>
+    <ul class="list-plain">
+      {% for event in todos %}
+        <li>
+          <div class="list-item-head">
+            <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+            <span class="meta">{{ event.deadline|date:"m-d H:i" }}</span>
+            <form method="post" action="{% url 'events:complete' event.pk %}" style="margin-left:auto;">
+              {% csrf_token %}<input type="hidden" name="next" value="/">
+              <button class="btn ghost small" type="submit">完成</button>
+            </form>
+          </div>
+          {% if event.course or event.location %}
+            <div class="small muted">
+              {{ event.course }}{% if event.course and event.location %} · {% endif %}{{ event.location }}
+            </div>
+          {% endif %}
+        </li>
+      {% empty %}
+        <li class="muted small">这一周没有待办截止</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>未来 {{ days }} 天的日程</h3>
+      <a class="small" href="{% url 'events:calendar' %}">日历</a>
+    </div>
+    <ul class="list-plain">
+      {% for event in schedules %}
+        <li>
+          <div class="list-item-head">
+            <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+            <span class="meta">{{ event.start_at|date:"m-d H:i" }}</span>
+          </div>
+          {% if event.location %}<div class="small muted">{{ event.location }}</div>{% endif %}
+        </li>
+      {% empty %}
+        <li class="muted small">这一周没有日程安排</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<div class="card">
+  <div class="stat-row">
+    <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">事项</div></div>
+    <div class="stat"><div class="num">{{ stats.drafts }}</div><div class="label">待确认</div></div>
+    <div class="stat"><div class="num">{{ stats.todos }}</div><div class="label">待办</div></div>
+    <div class="stat"><div class="num">{{ stats.reminders }}</div><div class="label">提醒</div></div>
+  </div>
+</div>
+{% endblock %}

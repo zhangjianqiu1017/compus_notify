@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}搜索 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>搜索</h1>
+    <p class="sub">{% if keyword %}「{{ keyword }}」命中 {{ total }} 条{% else %}在历史通知与事项里查找{% endif %}</p>
+  </div>
+</div>
+
+<div class="card">
+  <form method="get">
+    <div class="btn-row">
+      <input type="text" name="q" value="{{ keyword }}" placeholder="课程名、地点、关键词…" style="max-width:420px;">
+      <button class="btn" type="submit">搜索</button>
+    </div>
+  </form>
+</div>
+
+{% if keyword %}
+  <div class="card">
+    <h3>事项</h3>
+    <ul class="list-plain">
+      {% for event in events %}
+        <li>
+          <div class="list-item-head">
+            <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+            <span class="tag muted">{{ event.get_category_display }}</span>
+            {% if event.deadline %}<span class="meta">截止 {{ event.deadline|date:"m-d H:i" }}</span>{% endif %}
+          </div>
+          {% if event.course or event.location %}
+            <div class="small muted">
+              {{ event.course }}{% if event.course and event.location %} · {% endif %}{{ event.location }}
+            </div>
+          {% endif %}
+        </li>
+      {% empty %}
+        <li class="muted small">没有匹配的事项</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>原文</h3>
+    {% for message in messages %}
+      <div style="margin-bottom:14px;">
+        <div class="list-item-head" style="margin-bottom:6px;">
+          {% if message.sender %}<span class="meta">{{ message.sender }}</span>{% endif %}
+          {% if message.sent_at %}<span class="meta">{{ message.sent_at|date:"m-d H:i" }}</span>{% endif %}
+        </div>
+        <div class="raw-text">{{ message.display_text }}</div>
+      </div>
+    {% empty %}
+      <p class="muted small">没有匹配的原文</p>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card">
+    <div class="empty">
+      <p>输入关键词开始检索</p>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

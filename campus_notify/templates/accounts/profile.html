@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}账号 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ user.username }}</h1>
+    <p class="sub">共 {{ stats.events }} 个事项、{{ stats.messages }} 条原文</p>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>偏好</h3>
+    <form method="post">
+      {% csrf_token %}
+      {% for field in form %}
+        <div class="field">
+          <label style="display:flex;gap:8px;align-items:center;">
+            {{ field }} <span>{{ field.label }}</span>
+          </label>
+          {% if field.help_text %}<div class="small muted">{{ field.help_text }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      {% if not email_reminder_enabled %}
+        <p class="small muted">服务端邮件提醒当前是关闭状态，提醒只在站内显示。</p>
+      {% endif %}
+      <div class="form-actions">
+        <button type="submit" class="btn">保存</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>提醒送达</h3>
+    <p class="small muted">提醒到点后会发到这个邮箱，同时在站内「提醒」页留一份。</p>
+    <div class="field">
+      <div class="small muted">收件邮箱</div>
+      <div>{{ reminder_email|default:"未绑定邮箱，无法收邮件提醒" }}</div>
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">事项</div></div>
+      <div class="stat"><div class="num">{{ stats.messages }}</div><div class="label">原文</div></div>
+      <div class="stat"><div class="num">{{ stats.reminders }}</div><div class="label">提醒</div></div>
+    </div>
+    <div class="btn-row" style="margin-top:14px;">
+      <a class="btn ghost" href="{% url 'reminders:list' %}">管理提醒</a>
+      <a class="btn ghost" href="{% url 'core:data' %}">导出 / 删除</a>
+      <a class="btn ghost" href="{% url 'core:privacy' %}">隐私说明</a>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>注销账号</h3>
+  <p class="small muted">会同时删除全部通知、事项与提醒，无法恢复。只想清空数据可到「我的数据」页。</p>
+  <form method="post" action="{% url 'accounts:delete_account' %}">
+    {% csrf_token %}
+    <div class="btn-row">
+      <input type="text" name="confirm" placeholder="输入「删除」确认" style="max-width:200px;">
+      <button type="submit" class="btn danger" data-confirm="确定注销账号并删除全部数据吗？">注销</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

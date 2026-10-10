@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}导入通知 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>导入通知</h1>
+    <p class="sub">粘贴原文，自动提取时间、地点与截止日期，确认后生成待办和日程。</p>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="{% url 'events:create' %}">手动新建</a>
+  </div>
+</div>
+
+{% if duplicates %}
+<div class="card" style="border-color:#f2e0bf;background:#fffdf7;">
+  <h3>这段内容已经导入过了</h3>
+  <p class="small">{{ duplicate_hint }}</p>
+  <ul class="list-plain">
+    {% for item in duplicates %}
+      <li>
+        <div class="list-item-head">
+          <span class="meta">{{ item.imported_at|date:"Y-m-d H:i" }}</span>
+          {% if item.sender %}<span class="meta">{{ item.sender }}</span>{% endif %}
+          {% if item.raw_discarded %}<span class="tag muted">原文已丢弃</span>{% endif %}
+        </div>
+        <div class="evidence">{{ item.preview }}</div>
+        <div class="small">
+          {% for event in item.events %}
+            <a href="{% url 'events:detail' event.pk %}">《{{ event.title }}》</a>
+            <span class="muted">{{ event.get_status_display }}</span>
+          {% empty %}
+            <span class="muted">暂无对应事项，建议重新识别</span>
+          {% endfor %}
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+  <p class="small muted">
+    这是按原文内容去重：同一段通知只保留一份原文，免得同一条通知在你的待办里出现两次。
+    这些原文目前仍关联着上面列出的事项——如果确实要重新识别一遍，点「仍然重新识别」。
+    （如果你的识别结果已经删光了，这一页不会出现，系统会直接重识别。）
+  </p>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="post" data-submit-hotkey>
+    {% csrf_token %}
+    <div class="field">
+      <label for="text">通知原文</label>
+      <textarea name="text" id="text" rows="10" placeholder="张三 2026-10-08 09:12&#10;【程序设计竞赛报名】&#10;请于10月20日前完成报名，报名链接：https://example.edu/contest&#10;&#10;张三 2026-10-08 09:15&#10;补充：报名地点改到实验楼B302">{{ prefill }}</textarea>
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label for="source">导入方式</label>
+        <select name="source" id="source">
+          <option value="paste" {% if source == "paste" %}selected{% endif %}>粘贴文字</option>
+          <option value="share" {% if source == "share" %}selected{% endif %}>系统分享</option>
+          <option value="manual" {% if source == "manual" %}selected{% endif %}>手动录入</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="source_label">来源（选填）</label>
+        <input type="text" name="source_label" id="source_label" placeholder="软件2201班群" value="{{ source_label|default:'' }}">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn">开始识别</button>
+      {% if duplicates %}
+        <button type="submit" name="reuse" value="1" class="btn secondary">仍然重新识别</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

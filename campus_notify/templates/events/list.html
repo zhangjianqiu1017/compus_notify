@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}事项 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>事项</h1>
+    <p class="sub">共 {{ events|length }} 条</p>
+  </div>
+  <div class="actions">
+    {% if draft_count %}<a class="btn secondary" href="{% url 'events:review_list' %}">待确认 {{ draft_count }}</a>{% endif %}
+    <a class="btn ghost" href="{% url 'ingest:import' %}">导入通知</a>
+  </div>
+</div>
+
+<div class="card">
+  <form method="get" class="form-row">
+    <div class="field">
+      <label for="{{ form.q.id_for_label }}">关键词</label>
+      {{ form.q }}
+    </div>
+    <div class="field">
+      <label for="{{ form.category.id_for_label }}">分类</label>
+      {{ form.category }}
+    </div>
+    <div class="field" style="display:flex;align-items:flex-end;">
+      <button class="btn ghost" type="submit">筛选</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  {% if events %}
+    <form method="post" action="{% url 'events:bulk_delete' %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <div class="table-toolbar">
+        <span class="small muted" data-selected-count>未选择</span>
+        <button type="submit" class="btn danger-ghost small" data-confirm-any>
+          删除所选
+        </button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:36px;"><input type="checkbox" data-select-all aria-label="全选"></th>
+              <th>事项</th>
+              <th style="width:96px;">分类</th>
+              <th style="width:150px;">时间</th>
+              <th style="width:140px;">状态</th>
+              <th style="width:132px;">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for event in events %}
+            <tr>
+              <td><input type="checkbox" name="ids" value="{{ event.pk }}" data-row-checkbox
+                         aria-label="选择《{{ event.title }}》"></td>
+              <td>
+                <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+                {% if event.course or event.location %}
+                  <div class="small muted">
+                    {{ event.course }}{% if event.course and event.location %} · {% endif %}{{ event.location }}
+                  </div>
+                {% endif %}
+              </td>
+              <td><span class="tag muted">{{ event.get_category_display }}</span></td>
+              <td class="small nowrap">
+                {% if event.deadline %}截止 {{ event.deadline|date:"m-d H:i" }}<br>{% endif %}
+                {% if event.start_at %}开始 {{ event.start_at|date:"m-d H:i" }}{% endif %}
+                {% if not event.deadline and not event.start_at %}<span class="muted">—</span>{% endif %}
+              </td>
+              <td class="small">
+                {{ event.get_status_display }}
+                {% if event.saved_as_todo %}· {{ event.get_todo_status_display }}{% endif %}
+                {% if event.is_cancelled %}<span class="tag danger">已取消</span>{% endif %}
+              </td>
+              <td>
+                <div class="btn-row">
+                  <a class="btn ghost small" href="{% url 'events:edit' event.pk %}">编辑</a>
+                  <button type="submit" class="btn danger-ghost small"
+                          formaction="{% url 'events:delete' event.pk %}"
+                          data-confirm="删除《{{ event.title }}》？">删除</button>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </form>
+  {% else %}
+    <div class="empty">
+      <p>还没有事项</p>
+      <a class="btn" href="{% url 'ingest:import' %}">导入一条通知</a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

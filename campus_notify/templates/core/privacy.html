@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}隐私说明 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>隐私说明</h1>
+    <p class="sub">原文存在哪、谁会看到、怎么删</p>
+  </div>
+</div>
+
+<div class="card">
+  <h3>通知会不会上传</h3>
+  <p class="small">
+    {% if llm_configured %}
+      当前使用大模型识别：只有你主动点「开始识别」后，这批文本才会发送给识别服务用于提取字段，不做其他用途。
+    {% else %}
+      当前在本机识别：原文不离开本机，识别完全本地完成。
+    {% endif %}
+  </p>
+</div>
+
+<div class="card">
+  <h3>存什么</h3>
+  <ul class="small">
+    <li><strong>原文</strong>：默认保存，用于回看原文与字段证据；可随时关闭保存或整批删除。</li>
+    <li><strong>事项</strong>：事件名、时间、地点、链接等结构化字段。</li>
+    <li><strong>邮箱</strong>：用于登录、注册验证与找回密码，以及把提醒发给你，不用于其他用途、不对外提供。</li>
+    <li><strong>修改记录</strong>：你对识别结果的改动，用于持续提升识别准确率，随账号一起删除。</li>
+    <li><strong>运行日志</strong>：只记耗时、条数、失败原因，不留原文副本。</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>提醒邮件里有什么</h3>
+  <p class="small">
+    到点的提醒会发到你的注册邮箱，内容包括<strong>事项名、时间、地点、要求</strong>与一个详情页链接，
+    不包含通知原文全文，也不含其他人发给你以外的任何内容。邮件经学校的邮件服务商投递。
+  </p>
+  <p class="small muted">
+    不想收邮件：<a href="{% url 'accounts:profile' %}">账号</a> → 取消「提醒同时发到我的邮箱」，
+    提醒仍会出现在站内「提醒」页。
+  </p>
+</div>
+
+<div class="card">
+  <h3>不做的事</h3>
+  <ul class="small">
+    <li>不读取 QQ / 微信聊天记录，不自动登录教务系统；</li>
+    <li>不获取通讯录、位置等无关权限；</li>
+    <li>不投放广告；</li>
+    <li>不把数据用于识别之外的用途。</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>怎么删</h3>
+  <ul class="small">
+    <li>单条事项：事项详情页「删除」；</li>
+    <li>只删原文：<a href="{% url 'core:data' %}">我的数据</a> →「删除全部原文」；</li>
+    <li>清空全部：「我的数据」→「清空全部数据」；</li>
+    <li>连账号一起删：<a href="{% url 'accounts:profile' %}">账号</a> →「注销」。</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>当前数据量</h3>
+  <div class="stat-row">
+    <div class="stat"><div class="num">{{ stats.messages }}</div><div class="label">原文</div></div>
+    <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">事项</div></div>
+    <div class="stat"><div class="num">{{ stats.edits }}</div><div class="label">修改记录</div></div>
+  </div>
+  <p class="small muted" style="margin:12px 0 0;">
+    原文保存：<strong>{% if preference.store_raw_messages %}开启{% else %}关闭{% endif %}</strong>
+    · <a href="{% url 'accounts:profile' %}">修改</a>
+  </p>
+</div>
+{% endblock %}

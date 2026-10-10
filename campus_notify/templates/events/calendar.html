@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}日程 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>日程</h1>
+    <p class="sub">{{ month_label }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="?year={{ prev.year }}&month={{ prev.month }}">上一月</a>
+    <a class="btn ghost" href="{% url 'events:calendar' %}">本月</a>
+    <a class="btn ghost" href="?year={{ next.year }}&month={{ next.month }}">下一月</a>
+    <a class="btn secondary" href="{% url 'core:export_ics' %}">导出日历</a>
+  </div>
+</div>
+
+<div class="card">
+  <table class="calendar">
+    <thead>
+      <tr>{% for name in weekday_names %}<th>周{{ name }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for week in rows %}
+      <tr>
+        {% for cell in week %}
+        <td class="{% if not cell.in_month %}out-of-month{% endif %} {% if cell.is_today %}today{% endif %}">
+          <div class="day-num">{{ cell.date|date:"n/j" }}</div>
+          {% for event in cell.events %}
+            <a class="cal-event {% if not event.start_at %}is-deadline{% endif %}"
+               href="{% url 'events:detail' event.pk %}"
+               title="{{ event.title }}{% if event.deadline %}（截止 {{ event.deadline|date:'m-d H:i' }}）{% endif %}">
+              {% if event.start_at %}{{ event.start_at|date:"H:i" }} {% endif %}{{ event.title }}
+            </a>
+          {% endfor %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:12px 0 0;">橙色为截止，蓝色为日程。</p>
+</div>
+{% endblock %}

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}待办 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>待办</h1>
+    <p class="sub">共 {{ events|length }} 条</p>
+  </div>
+  <div class="actions">
+    <a class="btn {% if show == 'open' %}secondary{% else %}ghost{% endif %}" href="?show=open">未完成</a>
+    <a class="btn {% if show == 'done' %}secondary{% else %}ghost{% endif %}" href="?show=done">已完成</a>
+    <a class="btn {% if show == 'all' %}secondary{% else %}ghost{% endif %}" href="?show=all">全部</a>
+    <a class="btn" href="{% url 'ingest:import' %}">导入通知</a>
+  </div>
+</div>
+
+{% if show != "open" %}
+  <div class="card">
+    <div class="card-header" style="margin-bottom:0;">
+      <div class="small muted">已完成 {{ done_count }} 条</div>
+      {% if done_count %}
+        <form method="post" action="{% url 'events:delete_completed' %}">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit" class="btn danger-ghost small"
+                  data-confirm="删除全部 {{ done_count }} 条已完成的待办？">清空已完成</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+<div class="card">
+  {% if events %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:84px;">状态</th>
+          <th>事项</th>
+          <th style="width:150px;">截止</th>
+          <th style="width:96px;">分类</th>
+          <th style="width:210px;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in events %}
+        <tr>
+          <td>
+            {% if event.todo_status == "done" %}<span class="tag ok">已完成</span>
+            {% elif event.overdue %}<span class="tag danger">已过期</span>
+            {% else %}<span class="tag">进行中</span>{% endif %}
+          </td>
+          <td>
+            <a class="title-link {% if event.todo_status == 'done' %}done{% endif %}"
+               href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+            {% if event.is_cancelled %}<span class="tag danger">已取消</span>{% endif %}
+            {% if event.course or event.location %}
+              <div class="small muted">
+                {{ event.course }}{% if event.course and event.location %} · {% endif %}{{ event.location }}
+              </div>
+            {% endif %}
+          </td>
+          <td class="nowrap {% if event.overdue %}overdue{% endif %}">
+            {% if event.deadline %}{{ event.deadline|date:"m-d H:i" }}{% else %}<span class="muted">未填</span>{% endif %}
+          </td>
+          <td><span class="tag muted">{{ event.get_category_display }}</span></td>
+          <td>
+            <div class="btn-row">
+              {% if event.todo_status == "done" %}
+                <form method="post" action="{% url 'events:reopen' event.pk %}">
+                  {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                  <button class="btn ghost small" type="submit">撤销完成</button>
+                </form>
+              {% else %}
+                <form method="post" action="{% url 'events:complete' event.pk %}">
+                  {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                  <button class="btn small" type="submit">完成</button>
+                </form>
+              {% endif %}
+              <a class="btn ghost small" href="{% url 'events:edit' event.pk %}">编辑</a>
+              <form method="post" action="{% url 'events:delete' event.pk %}">
+                {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button class="btn danger-ghost small" type="submit"
+                        data-confirm="删除《{{ event.title }}》？">删除</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="empty">
+      <p>还没有待办</p>
+      <a class="btn" href="{% url 'ingest:import' %}">导入一条通知</a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

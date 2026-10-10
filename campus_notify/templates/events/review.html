@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% load ui %}
+{% block title %}确认识别结果 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>确认识别结果</h1>
+    <p class="sub">核对无误后保存，才会生成待办和日程。所有字段都可以改。</p>
+  </div>
+</div>
+
+{% if candidate %}
+<div class="card" style="border-color:#f2e0bf;background:#fffdf7;">
+  <h3>疑似与已有事项重复</h3>
+  <p class="small">{{ event.review_note }}</p>
+  <div class="evidence">
+    已有事项：<a href="{% url 'events:detail' candidate.pk %}" target="_blank">{{ candidate.title }}</a>
+    {% if candidate.deadline %}· 截止 {{ candidate.deadline|date:"Y-m-d H:i" }}{% endif %}
+    {% if candidate.location %}· 地点 {{ candidate.location }}{% endif %}
+  </div>
+  <p class="small muted">合并后原文并入同一事项，之后仍可撤销。</p>
+</div>
+{% endif %}
+
+<div class="grid-2">
+  <div class="card">
+    <h3>识别依据</h3>
+    {% for row in field_rows %}
+      <div style="margin-bottom:10px;">
+        <div class="small">
+          <span class="strong">{{ row.name|field_label }}</span>
+          <span class="{{ row.confidence|confidence_class }}">置信度 {{ row.confidence|confidence_percent }}</span>
+        </div>
+        <div class="evidence">
+          {% if row.message %}{{ row.message.raw_text|highlight_span:row.field.evidence_span }}{% else %}（原文已丢弃）{% endif %}
+        </div>
+      </div>
+    {% empty %}
+      <p class="muted small">未提取到字段，请手动补充。</p>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="msg msg-error">{{ form.non_field_errors }}</div>
+      {% endif %}
+
+      <div class="field">
+        <label for="{{ form.title.id_for_label }}">事件名</label>
+        {{ form.title }}
+      </div>
+      <div class="field">
+        <label for="{{ form.category.id_for_label }}">分类</label>
+        {{ form.category }}
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="{{ form.course.id_for_label }}">课程</label>
+          {{ form.course }}
+        </div>
+        <div class="field">
+          <label for="{{ form.location.id_for_label }}">地点</label>
+          {{ form.location }}
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="{{ form.deadline.id_for_label }}">截止时间</label>
+          {{ form.deadline }}
+        </div>
+        <div class="field">
+          <label for="{{ form.start_at.id_for_label }}">开始时间</label>
+          {{ form.start_at }}
+        </div>
+        <div class="field">
+          <label for="{{ form.end_at.id_for_label }}">结束时间</label>
+          {{ form.end_at }}
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="{{ form.link.id_for_label }}">链接</label>
+          {{ form.link }}
+        </div>
+        <div class="field">
+          <label for="{{ form.contact.id_for_label }}">联系人</label>
+          {{ form.contact }}
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="{{ form.organizer.id_for_label }}">主办方</label>
+        {{ form.organizer }}
+      </div>
+      <div class="field">
+        <label for="{{ form.requirement.id_for_label }}">要求 / 需要携带的材料</label>
+        {{ form.requirement }}
+      </div>
+
+      <h3>保存方式</h3>
+      <div class="radio-row">
+        <label>{{ form.save_as_todo }} <span>作为待办（跟踪完成状态）</span></label>
+        <label>{{ form.save_as_calendar }} <span>作为日程（日历视图）</span></label>
+      </div>
+
+      <h3>提醒</h3>
+      <div class="checkbox-grid">
+        {% for checkbox in form.reminder_offsets %}
+          <label>{{ checkbox.tag }} {{ checkbox.choice_label }}</label>
+        {% endfor %}
+      </div>
+      <p class="small muted">不勾选则不创建提醒。</p>
+
+      {% if candidate %}
+        <h3>重复处理</h3>
+        <div class="radio-row">
+          {% for radio in form.merge_choice %}
+            <label>{{ radio.tag }} {{ radio.choice_label }}</label>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <div class="form-actions">
+        <button type="submit" class="btn">确认并保存</button>
+        <a class="btn ghost" href="{% url 'events:list' %}">稍后再说</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h3>相关原文</h3>
+  {% for link in links %}
+    <div style="margin-bottom:10px;">
+      <div class="list-item-head">
+        <span class="tag muted">{{ link.get_relation_display }}</span>
+        {% if link.message.sender %}<span class="meta">{{ link.message.sender }}</span>{% endif %}
+        {% if link.message.sent_at %}<span class="meta">{{ link.message.sent_at|date:"m-d H:i" }}</span>{% endif %}
+      </div>
+      <div class="raw-text">{{ link.message.display_text }}</div>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

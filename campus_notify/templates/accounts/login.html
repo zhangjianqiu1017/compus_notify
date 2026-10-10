@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}登录 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 192 192" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#2f6fed"/>
+        <path d="M48 58h96v14H48zM48 88h96v14H48zM48 118h60v14H48z" fill="#fff"/>
+        <circle cx="140" cy="126" r="22" fill="#fff"/>
+        <path d="M132 126l6 7 12-14" stroke="#2f6fed" stroke-width="6" fill="none"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      {{ app_name }}
+    </div>
+    <p class="auth-sub">把群里的通知，整理成待办和日程</p>
+
+    <form method="post">
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="msg msg-error">{{ form.non_field_errors.0 }}</div>
+      {% endif %}
+      <div class="field">
+        <label for="{{ form.username.id_for_label }}">{{ form.username.label }}</label>
+        {{ form.username }}
+        {% for error in form.username.errors %}<div class="small" style="color:var(--danger)">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="field">
+        <label for="{{ form.password.id_for_label }}">{{ form.password.label }}</label>
+        {{ form.password }}
+        {% for error in form.password.errors %}<div class="small" style="color:var(--danger)">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn">登录</button>
+      </div>
+    </form>
+
+    <p class="auth-foot">
+      <a href="{% url 'accounts:password_reset' %}">忘记密码</a>
+      ·
+      <a href="{% url 'accounts:register' %}">注册新账号</a>
+    </p>
+  </div>
+</div>
+{% endblock %}

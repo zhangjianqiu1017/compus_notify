@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}我的数据 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>我的数据</h1>
+    <p class="sub">导出、删除</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="stat-row">
+    <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">事项</div></div>
+    <div class="stat"><div class="num">{{ stats.drafts }}</div><div class="label">待确认</div></div>
+    <div class="stat"><div class="num">{{ stats.messages }}</div><div class="label">原文</div></div>
+    <div class="stat"><div class="num">{{ stats.reminders }}</div><div class="label">提醒</div></div>
+    <div class="stat"><div class="num">{{ stats.edits }}</div><div class="label">修改记录</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>导出</h3>
+  <div class="btn-row">
+    <a class="btn" href="{% url 'core:export_json' %}">全部数据（JSON）</a>
+    <a class="btn ghost" href="{% url 'core:export_ics' %}">日历（.ics）</a>
+  </div>
+</div>
+
+<div class="card">
+  <h3>删除原文</h3>
+  <p class="small muted">保留事项，只清掉通知原文。</p>
+  <form method="post" action="{% url 'core:purge_raw' %}">
+    {% csrf_token %}
+    <button class="btn ghost" type="submit" data-confirm="删除全部原文？事项会保留。">删除全部原文（{{ stats.messages }} 条）</button>
+  </form>
+</div>
+
+<div class="card" style="border-color:#f5d2cf;">
+  <h3>清空全部数据</h3>
+  <p class="small muted">删除全部原文、事项、提醒与通知，账号保留。不可恢复。</p>
+  <form method="post" action="{% url 'core:delete_all' %}">
+    {% csrf_token %}
+    <div class="btn-row">
+      <input type="text" name="confirm" placeholder="输入「清空」确认" style="max-width:200px;">
+      <button class="btn danger" type="submit">清空全部数据</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

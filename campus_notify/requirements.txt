@@ -1,0 +1,2 @@
+# Web 版本后端依赖（LLM 调用使用标准库 urllib，无需额外 HTTP 客户端）
+Django>=5.2,<6.0
