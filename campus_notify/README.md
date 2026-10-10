@@ -9,49 +9,75 @@
 
 ## 一、快速开始
 
-```bash
-# 1) 依赖（仅有 Django；LLM 调用用标准库 urllib 实现，无需额外 HTTP 客户端）
+前提：Python 解释器版本 >= 3.10
+
+### 1.首次启动项目（环境配置 + 数据库迁移 + 启动Django项目）
+
+```shell
+cd campus_notify
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-# 2) 配置（可选：不配也能跑，会退回本地规则抽取器）
-copy .env.example .env      # Windows
-# cp .env.example .env      # macOS / Linux
-
-# 3) 建库
+copy .env.example .env
 python manage.py migrate
-
-# 4) 造一份演示数据（1 个已确认事项 + 3 个待确认事项）
 python manage.py seed_demo
-
-# 5) 启动
 python manage.py runserver 127.0.0.1:8000
 ```
 
-打开 http://127.0.0.1:8000 ：
+然后浏览器打开 <http://127.0.0.1:8000>，用演示账号登录：
 
-* 演示账号：`demo` / `DemoPass!2026`
-* 或自行注册（`/accounts/register/`）：**填邮箱 → 点「发送验证码」→ 填收到的 6 位码 + 密码**
-
-> **注册/找回密码的验证码怎么拿？** 开发默认走控制台邮件后端，
-> 验证码会打印在 `runserver` 的终端输出里，**同时**（仅 `DEBUG=1` 时）直接显示在页面上。
-> 想收真邮件就按 `.env.example` 配 SMTP。
-
-> **提醒邮件发到哪里？** 提醒到点后发到你的注册邮箱，站内「提醒 → 通知」页同时留一份。
-> 用的就是上面这套邮件配置；不配 SMTP 时邮件会打到 `runserver` 终端，链路照样能验证。
-
-想接大模型识别，在 `.env` 里填：
-
+```shell
+账号：demo
+密码：DemoPass!2026
 ```
-EXTRACTION_PROVIDER=auto          # auto=有 key 用大模型，否则本地规则抽取
+
+由于第一次启动的时候已经配置好了环境和数据库，所以之后启动只需要执行“启动Django服务”就好了
+
+```shell
+python manage.py runserver 127.0.0.1:8000
+```
+
+
+
+### 2.配置大模型API-Key
+
+> 接入大模型是为了解析我们复制过去的通知，将其转化为格式化的数据
+
+在 `campus_notify\.env` 里填：
+
+```ini
+EXTRACTION_PROVIDER=auto
 LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_API_KEY=sk-xxxx
+LLM_API_KEY=sk-你的key
 LLM_MODEL=deepseek-chat
 ```
 
-> 识别服务是 OpenAI 兼容接口，换成通义 / 自建 vLLM 等只需改 `LLM_BASE_URL` 与 `LLM_MODEL`
-> （对应需求 5.5-3「OCR、NLP、推送采用独立接口，方便替换第三方服务」）。
+例如：
 
----
+<img src="C:\Users\33408\AppData\Roaming\Typora\typora-user-images\image-20261010121306187.png" alt="image-20261010121306187" style="zoom:45%;" />
+
+### 3.配置SMTP服务
+
+> 用于注册、登录的验证码发送，而且我们设置的“提醒”也是通过邮件的形式提醒的
+
+以 QQ 邮箱为例，在 `.env` 里填：
+
+```ini
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.qq.com
+EMAIL_PORT=465
+EMAIL_USE_SSL=1
+EMAIL_USE_TLS=0
+EMAIL_HOST_USER=你的QQ号@qq.com
+EMAIL_HOST_PASSWORD=你的授权码
+DEFAULT_FROM_EMAIL=校园通知助手 <你的QQ号@qq.com>
+```
+
+例如：
+
+<img src="C:\Users\33408\AppData\Roaming\Typora\typora-user-images\image-20261010121652182.png" alt="image-20261010121652182" style="zoom:50%;" />
+
+SMTP授权码获取可以参考这个视频[QQ获取SMTP授权码_哔哩哔哩_bilibili](https://www.bilibili.com/video/BV1nyNB6sELN/?spm_id_from=333.337.search-card.all.click&vd_source=5dead84e1ffb02f1ce68028fdfd527f8)
 
 ## 二、Must 级需求实现对照
 
