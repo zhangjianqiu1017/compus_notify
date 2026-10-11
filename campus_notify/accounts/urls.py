@@ -23,10 +23,9 @@ urlpatterns = [
     # 注册（邮箱验证码绑定）
     path("register/", views.register, name="register"),
     path("register/send-code/", views.send_register_code, name="send_register_code"),
-    # 找回密码（邮箱验证码）
-    path("password-reset/", views.password_reset_request, name="password_reset"),
-    path("password-reset/send-code/", views.send_reset_code, name="send_reset_code"),
-    path("password-reset/confirm/", views.password_reset_confirm, name="password_reset_confirm"),
+    # 验证码登录（邮箱 + 验证码，不需要密码）
+    path("code-login/", views.code_login, name="code_login"),
+    path("code-login/send-code/", views.send_login_code, name="send_login_code"),
     # 账号与数据
     path("profile/", views.profile, name="profile"),
     path("delete/", views.delete_account, name="delete_account"),

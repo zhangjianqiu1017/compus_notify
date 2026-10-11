@@ -135,11 +135,14 @@ LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/accounts/login/"
 
-# 账号即邮箱：允许用邮箱或用户名（历史账号）登录
-AUTHENTICATION_BACKENDS = ["accounts.backends.EmailOrUsernameBackend"]
+# 账号即邮箱：允许用邮箱或用户名（历史账号）登录；验证码登录走专用后端
+AUTHENTICATION_BACKENDS = [
+    "accounts.backends.EmailCodeLoginBackend",
+    "accounts.backends.EmailOrUsernameBackend",
+]
 
 # --------------------------------------------------------------------------
-# 邮件（用于注册绑定邮箱与找回密码的验证码）
+# 邮件（用于注册绑定邮箱与验证码登录的验证码，以及事项提醒）
 # --------------------------------------------------------------------------
 # 开发默认打控制台：验证码会出现在 runserver 的日志里，不需要真实邮箱服务。
 # 生产改成 SMTP：

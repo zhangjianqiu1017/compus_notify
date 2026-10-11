@@ -67,12 +67,6 @@
       {{ form.requirement }}
     </div>
 
-    <h3>保存方式</h3>
-    <div class="radio-row">
-      <label>{{ form.save_as_todo }} <span>作为待办</span></label>
-      <label>{{ form.save_as_calendar }} <span>作为日程</span></label>
-    </div>
-
     <h3>提醒</h3>
     <div class="checkbox-grid">
       {% for checkbox in form.reminder_offsets %}

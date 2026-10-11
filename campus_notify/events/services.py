@@ -251,13 +251,15 @@ def split_message_from_event(event: Event, message) -> Event | None:
     return event
 
 
-def confirm_event(
-    event: Event, *, as_todo: bool, as_calendar: bool, reminder_offsets=None
-) -> Event:
-    """确认门通过：写入正式事项并编排提醒。"""
+def confirm_event(event: Event, *, reminder_offsets=None) -> Event:
+    """确认门通过：写入正式事项并编排提醒。
+
+    保存方式不再由用户选择：确认后事项同时出现在待办与日程里，
+    用一个动作换掉一次选择（NFR-08：核心流程更短）。
+    """
     from reminders.services import sync_reminders
 
-    event.confirm(as_todo=as_todo, as_calendar=as_calendar)
+    event.confirm()
     event.needs_review = False
     event.review_note = ""
     event.review_candidate = None

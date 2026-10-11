@@ -79,9 +79,13 @@ def latest_code(email: str, purpose: str) -> EmailVerificationCode | None:
 
 
 def seconds_until_resend(email: str, purpose: str) -> int:
-    """距离可以再次发码还有多少秒（0 表示可以发）。"""
+    """距离可以再次发码还有多少秒（0 表示可以发）。
+
+    已经用过的码是废码，不再计入冷却：否则注册成功（消费掉注册码）后，
+    用户注销账号想用同一邮箱重来时会被这 60 秒挡在门外。
+    """
     record = latest_code(email, purpose)
-    if record is None:
+    if record is None or record.used_at is not None:
         return 0
     passed = (timezone.now() - record.created_at).total_seconds()
     remaining = int(resend_seconds() - passed)
@@ -89,7 +93,10 @@ def seconds_until_resend(email: str, purpose: str) -> int:
 
 
 def send_code_email(email: str, code: str, purpose: str) -> None:
-    purpose_text = "注册绑定邮箱" if purpose == EmailVerificationCode.Purpose.REGISTER else "重置密码"
+    purpose_text = {
+        EmailVerificationCode.Purpose.REGISTER: "注册绑定邮箱",
+        EmailVerificationCode.Purpose.LOGIN: "登录",
+    }[purpose]
     subject = f"【校园通知助手】{purpose_text}验证码"
     body = (
         f"你的验证码是：{code}\n\n"
@@ -129,9 +136,13 @@ def issue_code(email: str, purpose: str) -> str:
     （transaction.atomic 在 CodeError 抛出时回滚本次的建码与作废旧码）。
     """
     normalized = normalize_email(email)
-    remaining = seconds_until_resend(normalized, purpose)
-    if remaining > 0:
-        raise CodeError(f"发送太频繁，请 {remaining} 秒后再试。")
+    # 用过的码是废码，不该再触发重发冷却：注册成功就会消费掉注册码，
+    # 用户随后注销账号、拿同一邮箱重来时，冷却不该把他挡在门外。
+    latest = latest_code(normalized, purpose)
+    if latest is None or latest.used_at is None:
+        remaining = seconds_until_resend(normalized, purpose)
+        if remaining > 0:
+            raise CodeError(f"发送太频繁，请 {remaining} 秒后再试。")
 
     # 旧码一律作废，避免同时存在多个有效验证码
     EmailVerificationCode.objects.filter(

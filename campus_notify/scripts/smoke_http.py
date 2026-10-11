@@ -152,6 +152,45 @@ else:
     )
     check(status == 200 and final.rstrip("/") == BASE, f"以既有账号登录成功（{LOCAL_ACCOUNT}）")
 
+# 1.5) 验证码登录（FR-01）：邮箱 + 验证码两个框，不需要密码
+#      先退出，再走一遍验证码登录，确认这条入口真的能把人放进来。
+status, home_html = get("/")
+status, _body, _final = post(
+    "/accounts/logout/", {"csrfmiddlewaretoken": csrf_token(home_html)}
+)
+status, logout_probe = get("/events/todo/")
+check("登录" in logout_probe, "退出登录后匿名访问待办页被拦下")
+
+if registered:
+    status, code_login_html = get("/accounts/code-login/")
+    check(status == 200 and "邮箱验证码" in code_login_html, "验证码登录页可访问")
+    check(
+        'type="password"' not in code_login_html,
+        "验证码登录页没有密码框（只有邮箱 + 验证码）",
+    )
+    status, code_login_page, _final = post(
+        "/accounts/code-login/send-code/",
+        {"csrfmiddlewaretoken": csrf_token(code_login_html), "email": EMAIL},
+    )
+    login_code = re.search(r"验证码是 <strong>(\d+)</strong>", code_login_page)
+    if login_code:
+        status, _body, final = post(
+            "/accounts/code-login/",
+            {
+                "csrfmiddlewaretoken": csrf_token(code_login_page),
+                "email": EMAIL,
+                "code": login_code.group(1),
+            },
+        )
+        check(
+            status == 200 and final.rstrip("/") == BASE,
+            "用邮箱 + 验证码登录成功（未输入任何密码）",
+        )
+    else:
+        check(True, "登录验证码未回显（已配置真实 SMTP），跳过验证码登录步骤")
+else:
+    check(True, "注册未走通，跳过验证码登录步骤")
+
 # 2) 导入通知（FR-02 + FR-04）
 status, body = get("/ingest/")
 status, _body, final = post(
@@ -161,8 +200,9 @@ status, _body, final = post(
 check("/events/review/" in final, f"导入后跳转到确认页（{final}）")
 
 status, review_html = get(urllib.parse.urlparse(final).path)
-check(status == 200 and "识别依据" in review_html, "确认页渲染成功")
-check("<mark>" in review_html, "字段证据在原文中被高亮")
+check(status == 200 and "确认识别结果" in review_html, "确认页渲染成功")
+check('<mark>' in review_html and 'class="ev-label"' in review_html, "字段证据就地标在原文里（带字段名标签）")
+check("<h3>识别依据</h3>" not in review_html, "独立的「识别依据」栏已移除")
 
 prefix_match = re.search(r'name="(e\d+)-title"', review_html)
 if not prefix_match:
@@ -172,8 +212,6 @@ event_id = prefix[1:]
 
 form_data = parse_form(review_html, prefix)
 form_data["csrfmiddlewaretoken"] = csrf_token(review_html)
-form_data[f"{prefix}-save_as_todo"] = "on"
-form_data[f"{prefix}-save_as_calendar"] = "on"
 form_data[f"{prefix}-reminder_offsets"] = ["1440", "120"]
 check(form_data.get(f"{prefix}-title", "").strip() != "", "确认页带回识别出的事件名")
 check("10月20日" in review_html or "2026-10-20" in review_html, "确认页包含识别出的截止时间")
@@ -195,8 +233,9 @@ check(status == 200 and "程序设计竞赛报名" in todo_html, "待办列表�
 status, calendar_html = get("/events/calendar/?year=2026&month=10")
 check(status == 200 and "程序设计竞赛报名" in calendar_html, "日历视图包含该事项")
 
-status, reminder_html = get("/reminders/")
-check(status == 200 and "截止前 1 天" in reminder_html, "提醒已按默认模板创建")
+status, reminder_html = get(f"/events/{event_id}/")
+check(status == 200 and "截止前 1 天" in reminder_html, "提醒挂在事项详情页，已按默认模板创建")
+check("添加提醒" in reminder_html, "详情页可直接增改提醒，无需独立提醒页")
 
 # 4) 搜索（FR-11）
 status, search_html = get("/search/?q=" + urllib.parse.quote("实验楼"))

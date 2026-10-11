@@ -38,31 +38,41 @@
         <tr>
           <th style="width:84px;">状态</th>
           <th>事项</th>
-          <th style="width:150px;">截止</th>
+          <th style="width:150px;">时间</th>
           <th style="width:96px;">分类</th>
           <th style="width:210px;">操作</th>
         </tr>
       </thead>
       <tbody>
         {% for event in events %}
-        <tr>
+        <tr class="{% if event.is_closed %}is-closed{% endif %}">
           <td>
             {% if event.todo_status == "done" %}<span class="tag ok">已完成</span>
+            {% elif event.is_cancelled %}<span class="tag danger">已取消</span>
             {% elif event.overdue %}<span class="tag danger">已过期</span>
+            {% elif event.is_ended %}<span class="tag muted">已结束</span>
             {% else %}<span class="tag">进行中</span>{% endif %}
           </td>
           <td>
             <a class="title-link {% if event.todo_status == 'done' %}done{% endif %}"
                href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
-            {% if event.is_cancelled %}<span class="tag danger">已取消</span>{% endif %}
+            {% if event.is_cancelled and event.todo_status == "done" %}<span class="tag danger">已取消</span>{% endif %}
             {% if event.course or event.location %}
               <div class="small muted">
                 {{ event.course }}{% if event.course and event.location %} · {% endif %}{{ event.location }}
               </div>
             {% endif %}
           </td>
-          <td class="nowrap {% if event.overdue %}overdue{% endif %}">
-            {% if event.deadline %}{{ event.deadline|date:"m-d H:i" }}{% else %}<span class="muted">未填</span>{% endif %}
+          {# 截止时间不是唯一重要的时间点：活动的开始时间同样是「什么时候该去」 #}
+          <td class="small nowrap">
+            {% if event.deadline %}
+              <span class="{% if event.overdue_kind == 'deadline' and not event.is_closed %}overdue{% endif %}">截止 {{ event.deadline|date:"m-d H:i" }}</span>
+            {% endif %}
+            {% if event.start_at %}
+              {% if event.deadline %}<br>{% endif %}
+              <span class="{% if event.overdue_kind == 'start_at' and not event.is_closed %}overdue{% endif %}">开始 {{ event.start_at|date:"m-d H:i" }}</span>
+            {% endif %}
+            {% if not event.deadline and not event.start_at %}<span class="muted">未填</span>{% endif %}
           </td>
           <td><span class="tag muted">{{ event.get_category_display }}</span></td>
           <td>

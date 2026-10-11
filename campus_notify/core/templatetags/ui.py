@@ -1,4 +1,4 @@
-"""模板辅助标签：原文证据高亮、置信度分档等。"""
+"""模板辅助标签：原文就地证据标注、置信度分档等。"""
 from __future__ import annotations
 
 from django import template
@@ -11,26 +11,53 @@ register = template.Library()
 
 
 @register.filter
-def highlight_span(text, span) -> str:
-    """把证据区间渲染为 <mark>，用于「这条字段值来自原文哪一段」。"""
+def mark_evidence(text, annotations) -> str:
+    """在原文里就地标注字段证据：<mark>证据片段</mark> + 字段名小标签。
+
+    annotations 形如 [{"start": int, "end": int, "label": "截止时间"}, ...]。
+    这样「识别依据」不必再把整段原文按字段重复一遍——用户读原文时就看到了
+    「哪个值来自哪一句」。
+
+    重叠时**更精确（更短）的片段胜出**：规则抽取器把「要求/材料」这类整行文本整体
+    当作证据，它的跨度会盖住同一条消息里的「截止时间」「链接」。粗跨度让位，
+    否则原文里只剩一个盖住整行的高亮，等于没标。
+    """
     if not text:
         return ""
-    bounds = None
-    if isinstance(span, str) and ":" in span:
-        start, _, end = span.partition(":")
+
+    items: list[tuple[int, int, str]] = []
+    for item in annotations or []:
         try:
-            bounds = (int(start), int(end))
-        except ValueError:
-            bounds = None
-    elif isinstance(span, (tuple, list)) and len(span) == 2:
-        bounds = (int(span[0]), int(span[1]))
-    if not bounds:
+            start = int(item["start"])
+            end = int(item["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        start = max(0, min(start, len(text)))
+        end = max(start, min(end, len(text)))
+        if end > start:
+            items.append((start, end, str(item.get("label") or "")))
+    if not items:
         return escape(text)
-    start = max(0, min(bounds[0], len(text)))
-    end = max(start, min(bounds[1], len(text)))
-    return mark_safe(
-        f"{escape(text[:start])}<mark>{escape(text[start:end])}</mark>{escape(text[end:])}"
-    )
+
+    kept: list[tuple[int, int, str]] = []
+    for start, end, label in sorted(items, key=lambda row: (row[1] - row[0], row[0])):
+        if any(start < kept_end and kept_start < end for kept_start, kept_end, _ in kept):
+            continue
+        kept.append((start, end, label))
+    if not kept:
+        return escape(text)
+    kept.sort(key=lambda row: row[0])
+
+    out: list[str] = []
+    position = 0
+    for start, end, label in kept:
+        out.append(escape(text[position:start]))
+        out.append(f"<mark>{escape(text[start:end])}</mark>")
+        if label:
+            out.append(f'<span class="ev-label">{escape(label)}</span>')
+        position = end
+    out.append(escape(text[position:]))
+    return mark_safe("".join(out))
 
 
 @register.filter

@@ -8,8 +8,7 @@ from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
 from accounts.forms import (
-    PasswordResetConfirmForm,
-    PasswordResetRequestForm,
+    LoginCodeForm,
     PreferenceForm,
     RegisterForm,
     SendCodeForm,
@@ -19,7 +18,6 @@ from accounts.services import (
     CodeError,
     code_ttl_minutes,
     dev_show_code,
-    find_user_by_email,
     issue_code,
     seconds_until_resend,
 )
@@ -47,9 +45,6 @@ def _dev_code_context(request: HttpRequest, purpose: str) -> dict:
     return {"dev_code": payload.get("code"), "dev_email": payload.get("email")}
 
 
-NEUTRAL_RESET_NOTICE = "如果该邮箱已注册，验证码已发送，请查收。"
-
-
 def _resend_context(request: HttpRequest, purpose: str) -> dict:
     """把「距离可以重发还有多少秒」交给页面，刷新浏览器也绕不过冷却。"""
     email = request.session.get(SESSION_EMAIL_KEY, "")
@@ -64,17 +59,20 @@ def _resend_context(request: HttpRequest, purpose: str) -> dict:
 def _send_code(request: HttpRequest, purpose: str, *, redirect_to: str):
     """公共的发码入口：验证邮箱 → 发码 → 回跳。
 
-    只有「邮箱确实属于一个账号」时才发信：否则系统会变成给任意地址发信的机器，
-    可以被用来做邮件轰炸。判断结果不外显（提示语保持一致），避免被探测账号是否存在。
+    只给「该发码的邮箱」发信，否则系统会变成给任意地址发信的机器，可被用来邮件轰炸：
+    * 注册用途：邮箱**没注册过**才发（`require_unregistered`）；
+    * 登录用途：邮箱**已注册**才发（`require_registered`）。
+
+    校验放在表单层（`SendCodeForm`），好处是「该不该发」和「发不发得出去」只有一处判断。
+    顺序也不能反——先发信再校验的话，被拒的邮箱照样会收到一封邮件。
     """
-    check_registered = purpose == EmailVerificationCode.Purpose.REGISTER
-    form = SendCodeForm(request.POST or None, require_unregistered=check_registered)
+    form = SendCodeForm(
+        request.POST or None,
+        require_unregistered=purpose == EmailVerificationCode.Purpose.REGISTER,
+        require_registered=purpose == EmailVerificationCode.Purpose.LOGIN,
+    )
     if form.is_valid():
         target = form.cleaned_data["email"]
-        user = find_user_by_email(target)
-        if user is None and not check_registered:
-            messages.info(request, NEUTRAL_RESET_NOTICE)
-            return redirect(redirect_to)
         try:
             code = issue_code(target, purpose)
         except CodeError as exc:
@@ -82,18 +80,14 @@ def _send_code(request: HttpRequest, purpose: str, *, redirect_to: str):
         else:
             _remember_dev_code(request, target, purpose, code)
             request.session[SESSION_EMAIL_KEY] = target
-            if user is None:
-                messages.success(
-                    request,
-                    f"验证码已发送至 {target}，{code_ttl_minutes()} 分钟内有效，请查收邮件。",
-                )
-            else:
-                messages.info(request, NEUTRAL_RESET_NOTICE)
+            messages.success(
+                request,
+                f"验证码已发送至 {target}，{code_ttl_minutes()} 分钟内有效，请查收邮件。",
+            )
     else:
         for error in form.errors.get("email", []):
             messages.error(request, error)
     return redirect(redirect_to)
-
 
 # ---------------------------------------------------------------------------
 # 注册（邮箱验证码绑定）
@@ -132,76 +126,41 @@ def send_register_code(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------------
-# 找回密码（邮箱验证码）
+# 验证码登录（邮箱 + 验证码，不需要密码）
 # ---------------------------------------------------------------------------
 @require_http_methods(["GET", "POST"])
-def password_reset_request(request: HttpRequest) -> HttpResponse:
-    """第一步：输入注册邮箱，发送重置验证码。"""
+def code_login(request: HttpRequest) -> HttpResponse:
+    """FR-01 验证码登录：填邮箱 + 验证码，验证码正确即登录。
+
+    和密码登录（accounts:login）是两条并行的入口，互不影响。
+    """
     if request.user.is_authenticated:
         return redirect("core:home")
 
-    form = PasswordResetRequestForm(request.POST or None)
+    initial = {"email": request.session.get(SESSION_EMAIL_KEY, "")}
+    form = LoginCodeForm(request.POST or None, initial=initial)
     if request.method == "POST" and form.is_valid():
-        email = form.cleaned_data["email"]
-        user = form.cleaned_data.get("user")
-        if user is None:
-            # 不存在的邮箱不发信，但提示语与成功时一致，避免被用来探测账号
-            messages.info(request, NEUTRAL_RESET_NOTICE)
-            return redirect("accounts:password_reset_confirm")
-        try:
-            code = issue_code(email, EmailVerificationCode.Purpose.RESET)
-        except CodeError as exc:
-            messages.error(request, str(exc))
-        else:
-            _remember_dev_code(request, email, EmailVerificationCode.Purpose.RESET, code)
-            request.session[SESSION_EMAIL_KEY] = email
-            messages.success(request, f"验证码已发送至 {email}，请查收。")
-            return redirect("accounts:password_reset_confirm")
+        user = form.save()
+        request.session.pop(SESSION_CODE_KEY, None)
+        login(request, user, backend="accounts.backends.EmailCodeLoginBackend")
+        messages.success(request, "登录成功，欢迎回来。")
+        return redirect("core:home")
 
     return render(
         request,
-        "accounts/password_reset_request.html",
+        "accounts/login_code.html",
         {
             "form": form,
-            **_dev_code_context(request, EmailVerificationCode.Purpose.RESET),
-            **_resend_context(request, EmailVerificationCode.Purpose.RESET),
+            **_dev_code_context(request, EmailVerificationCode.Purpose.LOGIN),
+            **_resend_context(request, EmailVerificationCode.Purpose.LOGIN),
         },
     )
 
 
 @require_POST
-def send_reset_code(request: HttpRequest) -> HttpResponse:
+def send_login_code(request: HttpRequest) -> HttpResponse:
     return _send_code(
-        request, EmailVerificationCode.Purpose.RESET, redirect_to="accounts:password_reset"
-    )
-
-
-@require_http_methods(["GET", "POST"])
-def password_reset_confirm(request: HttpRequest) -> HttpResponse:
-    """第二步：验证码 + 新密码。"""
-    if request.user.is_authenticated:
-        return redirect("core:home")
-
-    initial = {"email": request.session.get(SESSION_EMAIL_KEY, "")}
-    form = PasswordResetConfirmForm(request.POST or None, initial=initial)
-    if request.method == "POST" and form.is_valid():
-        form.save()
-        request.session.pop(SESSION_CODE_KEY, None)
-        messages.success(request, "密码已重置，请用新密码登录。")
-        return redirect("accounts:login")
-
-    remaining = 0
-    email = initial.get("email")
-    if email:
-        remaining = seconds_until_resend(email, EmailVerificationCode.Purpose.RESET)
-    return render(
-        request,
-        "accounts/password_reset_confirm.html",
-        {
-            "form": form,
-            "resend_in": remaining,
-            **_dev_code_context(request, EmailVerificationCode.Purpose.RESET),
-        },
+        request, EmailVerificationCode.Purpose.LOGIN, redirect_to="accounts:code_login"
     )
 
 

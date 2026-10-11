@@ -64,6 +64,20 @@ class SplitMessagesTests(TestCase):
         self.assertFalse(confident)
         self.assertEqual(len(messages), 1)
 
+    def test_blank_lines_are_not_message_boundaries(self):
+        """回归：用户粘的一段通知就是一条原文，空行只是排版，不能拆成「原始 + 补充」。"""
+        raw = (
+            "【程序设计竞赛报名】\n"
+            "请于10月20日前完成报名，报名链接见群公告。\n"
+            "\n"
+            "另外：报名地点改到实验楼B302，请携带学生证。"
+        )
+        messages, confident = split_messages(raw)
+        self.assertFalse(confident)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("请于10月20日前完成报名", messages[0].raw_text)
+        self.assertIn("实验楼B302", messages[0].raw_text)
+
     def test_normalize_text_drops_zero_width(self):
         self.assertEqual(normalize_text("a\u200bb\r\nc"), "ab\nc")
 
@@ -89,6 +103,18 @@ class CreateBatchTests(TestCase):
         self.assertEqual(batch.owner, self.user)
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].seq, 1)
+        self.assertEqual(warnings, [])
+
+    def test_multiparagraph_paste_stores_one_message(self):
+        """一段带空行的粘贴只落一条原文，不会拆成 primary + supplement 两条。
+
+        没有发送者/时间戳边界是正常的粘贴方式，不该因此警告用户。
+        """
+        raw = "【通知】请于10月20日前提交作业\n\n补充：提交地点改为实验楼B302"
+        _batch, created, warnings = create_batch(self.user, raw)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(Message.objects.filter(owner=self.user).count(), 1)
+        self.assertIn("实验楼B302", created[0].raw_text)
         self.assertEqual(warnings, [])
 
     def test_duplicate_import_is_idempotent(self):
@@ -155,11 +181,15 @@ class CreateBatchTests(TestCase):
         self.assertEqual(reused[0].raw_text, raw)
 
     def test_partial_duplicate_keeps_new_messages(self):
-        batch, messages, _ = create_batch(self.user, "【通知A】请于10月20日前完成报名")
+        """「部分重复」现在只可能出现在有真实边界的批次里（群聊记录）：撞的那条跳过，新的保留。"""
+        full = (
+            "张三 2026-10-08 09:12\n【通知A】请于10月20日前完成报名\n"
+            "李四 2026-10-08 09:20\n【通知B】请于11月1日前提交材料"
+        )
+        batch, messages, _ = create_batch(self.user, "张三 2026-10-08 09:12\n【通知A】请于10月20日前完成报名")
         create_event_from_message(self.user, batch, messages[0])
 
-        raw = "【通知A】请于10月20日前完成报名\n\n【通知B】请于11月1日前提交材料"
-        batch2, created, warnings = create_batch(self.user, raw)
+        batch2, created, warnings = create_batch(self.user, full)
         self.assertEqual(len(created), 1)
         self.assertIn("通知B", created[0].raw_text)
         self.assertTrue(any("跳过" in warning for warning in warnings))

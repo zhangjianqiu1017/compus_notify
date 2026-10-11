@@ -22,10 +22,13 @@
     <h3>事项</h3>
     <ul class="list-plain">
       {% for event in events %}
-        <li>
+        <li class="{% if event.is_closed %}is-closed{% endif %}">
           <div class="list-item-head">
             <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
             <span class="tag muted">{{ event.get_category_display }}</span>
+            {% if event.todo_status == "done" %}<span class="tag ok">已完成</span>
+            {% elif event.is_cancelled %}<span class="tag danger">已取消</span>
+            {% elif event.is_ended %}<span class="tag muted">已结束</span>{% endif %}
             {% if event.deadline %}<span class="meta">截止 {{ event.deadline|date:"m-d H:i" }}</span>{% endif %}
           </div>
           {% if event.course or event.location %}

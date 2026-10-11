@@ -46,7 +46,7 @@ class UserPreference(models.Model):
 
 
 class EmailVerificationCode(models.Model):
-    """邮箱验证码：注册绑定邮箱与找回密码共用。
+    """邮箱验证码：注册绑定邮箱与验证码登录共用。
 
     只存验证码哈希（不落明文），并带过期时间、错误次数与使用标记，
     避免验证码被读库复用，或被无限次暴力尝试。
@@ -54,7 +54,7 @@ class EmailVerificationCode(models.Model):
 
     class Purpose(models.TextChoices):
         REGISTER = "register", "注册绑定邮箱"
-        RESET = "reset", "重置密码"
+        LOGIN = "login", "验证码登录"
 
     email = models.EmailField(db_index=True)
     purpose = models.CharField(max_length=16, choices=Purpose.choices)

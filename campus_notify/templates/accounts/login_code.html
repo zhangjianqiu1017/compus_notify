@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}验证码登录 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 192 192" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#2f6fed"/>
+        <path d="M48 58h96v14H48zM48 88h96v14H48zM48 118h60v14H48z" fill="#fff"/>
+        <circle cx="140" cy="126" r="22" fill="#fff"/>
+        <path d="M132 126l6 7 12-14" stroke="#2f6fed" stroke-width="6" fill="none"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      {{ app_name }}
+    </div>
+    <p class="auth-sub">收一封邮件，填验证码就能进，不用记密码</p>
+
+    {% if dev_code %}
+      <div class="msg msg-info small">
+        开发模式：验证码是 <strong>{{ dev_code }}</strong>（生产环境不会显示）
+      </div>
+    {% endif %}
+
+    <form method="post" data-primary-submit>
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="msg msg-error">{{ form.non_field_errors.0 }}</div>
+      {% endif %}
+
+      <div class="field">
+        <label for="{{ form.email.id_for_label }}">{{ form.email.label }}</label>
+        <div class="input-group">
+          {{ form.email }}
+          <button type="submit" class="input-group-action"
+                  formaction="{% url 'accounts:send_login_code' %}"
+                  formnovalidate
+                  data-resend-button
+                  data-resend-in="{{ resend_in|default:0 }}"
+                  data-resend-email="{{ resend_email|default:'' }}"
+                  data-idle-label="发送验证码"
+                  {% if resend_in %}disabled{% endif %}>{% if resend_in %}重新发送 {{ resend_in }}s{% else %}发送验证码{% endif %}</button>
+        </div>
+        {% for error in form.email.errors %}<div class="small" style="color:var(--danger)">{{ error }}</div>{% endfor %}
+      </div>
+
+      <div class="field">
+        <label for="{{ form.code.id_for_label }}">{{ form.code.label }}</label>
+        {{ form.code }}
+        <div class="small muted">填邮件里那 6 位数字，10 分钟内有效</div>
+        {% for error in form.code.errors %}<div class="small" style="color:var(--danger)">{{ error }}</div>{% endfor %}
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn" data-primary-submit-button>登录</button>
+      </div>
+    </form>
+
+    <p class="auth-foot">
+      <a href="{% url 'accounts:login' %}">用密码登录</a>
+      ·
+      <a href="{% url 'accounts:register' %}">注册新账号</a>
+    </p>
+  </div>
+</div>
+{% endblock %}

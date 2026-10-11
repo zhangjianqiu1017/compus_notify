@@ -1,4 +1,4 @@
-﻿"""搜索、导出、删除等跨应用服务。"""
+"""搜索、导出、删除等跨应用服务。"""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -19,6 +19,15 @@ def count_user_data(user) -> dict:
         "events": Event.objects.for_user(user).count(),
         "drafts": Event.objects.for_user(user).filter(status=Event.Status.DRAFT).count(),
         "todos": Event.objects.for_user(user).filter(saved_as_todo=True).count(),
+        # 首页角标用的「还没做完的事」：确认后的事项都算待办，所以这里要按完成状态收口
+        "open_todos": Event.objects.for_user(user)
+        .filter(
+            status=Event.Status.CONFIRMED,
+            is_cancelled=False,
+            saved_as_todo=True,
+            todo_status=Event.TodoStatus.PENDING,
+        )
+        .count(),
         "messages": Message.objects.filter(owner=user).count(),
         "reminders": Reminder.objects.filter(owner=user).count(),
         "notifications": InAppNotification.objects.filter(owner=user).count(),
@@ -56,25 +65,58 @@ def search(user, query: str, *, limit: int = 60) -> dict:
     }
 
 
+TIMELINE_LABELS = {"deadline": "截止", "start_at": "开始"}
+
+
+def _nearest_anchor(event, now, soon):
+    """事项在未来窗口内最近的那个时间点。
+
+    一个事项可能既有截止时间又有开始时间：首页只挑最近的那个作为排序依据，
+    并告诉界面这是「截止」还是「开始」，这样一条事项不会在两个位置各出现一次。
+    """
+    options = []
+    if event.deadline and now <= event.deadline <= soon:
+        options.append(("deadline", event.deadline))
+    if event.start_at and now <= event.start_at <= soon:
+        options.append(("start_at", event.start_at))
+    if not options:
+        return None, None
+    # 时间相同时按「截止」展示：那才是需要动手的那件事
+    return min(options, key=lambda item: (item[1], item[0] != "deadline"))
+
+
 def upcoming(user, *, days: int = 7, limit: int = 20) -> dict:
+    """首页数据：已过截止时间的事项 + 未来 N 天的时间轴。
+
+    确认后的事项既是待办也是日程（见 `Event.confirm`），所以首页不再拆成
+    「截止 / 日程」两栏——一条事项只出现一次，按它最近的时间点排序。
+    """
     now = timezone.now()
     soon = now + timedelta(days=days)
-    todos = (
+    active = (
         Event.objects.for_user(user)
-        .filter(saved_as_todo=True, status=Event.Status.CONFIRMED, is_cancelled=False)
+        .filter(status=Event.Status.CONFIRMED, is_cancelled=False)
         .exclude(todo_status=Event.TodoStatus.DONE)
-        .exclude(deadline=None)
-        .filter(deadline__lte=soon)
+    )
+    overdue = list(
+        active.filter(todo_status=Event.TodoStatus.PENDING, deadline__lt=now)
         .order_by("deadline")[:limit]
     )
-    schedules = (
-        Event.objects.for_user(user)
-        .filter(saved_as_calendar=True, status=Event.Status.CONFIRMED, is_cancelled=False)
-        .exclude(start_at=None)
-        .filter(start_at__gte=now, start_at__lte=soon)
-        .order_by("start_at")[:limit]
-    )
-    return {"todos": list(todos), "schedules": list(schedules), "days": days}
+    # 已经出现在「已过截止时间」里的，时间轴上不再重复
+    window = active.filter(
+        Q(deadline__gte=now, deadline__lte=soon) | Q(start_at__gte=now, start_at__lte=soon)
+    ).exclude(pk__in=[item.pk for item in overdue])
+
+    rows = []
+    for event in window:
+        kind, anchor = _nearest_anchor(event, now, soon)
+        if anchor is None:
+            continue
+        rows.append(
+            {"event": event, "kind": kind, "kind_label": TIMELINE_LABELS[kind], "anchor": anchor}
+        )
+    rows.sort(key=lambda row: (row["anchor"], row["kind"] != "deadline"))
+    return {"timeline": rows[:limit], "overdue": overdue, "days": days}
 
 
 def _ics_escape(text: str) -> str:

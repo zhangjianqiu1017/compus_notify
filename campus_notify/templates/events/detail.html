@@ -1,16 +1,26 @@
 {% extends "base.html" %}
 {% load ui %}
 {% block title %}{{ event.title }} · {{ app_name }}{% endblock %}
+{# 核对说明是「为什么这条要你拍板」：常驻、可关，但不占页面顶部 #}
+{% block sticky_toasts %}
+  {% if event.review_note %}
+    <div class="toast toast-warning" data-toast data-toast-sticky>
+      <span class="toast-text">{{ event.review_note }}</span>
+      <button type="button" class="toast-close" data-toast-close aria-label="关闭提示">&#10005;</button>
+    </div>
+  {% endif %}
+{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>{{ event.title }}</h1>
+    <h1 class="{% if event.is_closed %}is-closed{% endif %}">{{ event.title }}</h1>
     <p class="sub">
       <span class="tag muted">{{ event.get_category_display }}</span>
       {% if event.status == "draft" %}<span class="tag warn">待确认</span>{% endif %}
       {% if event.saved_as_todo %}<span class="tag">{{ event.get_todo_status_display }}</span>{% endif %}
       {% if event.saved_as_calendar %}<span class="tag">日程</span>{% endif %}
-      {% if event.is_cancelled %}<span class="tag danger">已取消</span>{% endif %}
+      {% if event.is_cancelled %}<span class="tag danger">已取消</span>
+      {% elif event.is_ended %}<span class="tag muted">已结束</span>{% endif %}
     </p>
   </div>
   <div class="actions">
@@ -33,10 +43,6 @@
   </div>
 </div>
 
-{% if event.review_note %}
-  <div class="msg msg-warning">{{ event.review_note }}</div>
-{% endif %}
-
 <div class="card">
   <div class="table-wrap">
     <table>
@@ -56,9 +62,6 @@
             {% if row.name == "link" %}<a href="{{ row.field.value_text }}" target="_blank" rel="noopener">{{ row.field.value_text }}</a>
             {% elif row.field.value_dt %}{{ row.field.value_dt|date:"Y-m-d H:i" }}
             {% else %}{{ row.field.value_text }}{% endif %}
-            {% if row.evidence %}
-              <div class="evidence">{{ row.message.raw_text|highlight_span:row.field.evidence_span }}</div>
-            {% endif %}
           </td>
           <td class="{{ row.confidence|confidence_class }}">{{ row.confidence|confidence_percent }}</td>
           <td class="small muted">#{{ row.message.seq|default:"—" }}</td>
@@ -72,35 +75,99 @@
 </div>
 
 <div class="grid-2">
-  <div class="card">
+  <div class="card reminder-card">
     <h3>提醒</h3>
-    <ul class="list-plain">
+    <ul class="list-plain reminder-list">
       {% for reminder in reminders %}
         <li>
           <div class="list-item-head">
             <span class="strong">{{ reminder.label }}</span>
-            {% if not reminder.is_enabled %}<span class="tag muted">已关闭</span>{% endif %}
+            {% if not reminder.is_enabled %}
+              <span class="tag muted">已关闭</span>
+            {% elif reminder.status == "sent" %}
+              <span class="tag ok">已送达</span>
+            {% elif reminder.status == "cancelled" %}
+              <span class="tag muted">已取消</span>
+            {% else %}
+              <span class="tag">待触发</span>
+            {% endif %}
+            <span class="meta {% if reminder.status == 'scheduled' and reminder.is_enabled and reminder.remind_at < now %}overdue{% endif %}">
+              {% if reminder.status == "scheduled" %}{{ reminder.remind_at|date:"m-d H:i" }} 触发{% endif %}
+            </span>
           </div>
-          <div class="small muted">{{ reminder.remind_at|date:"Y-m-d H:i" }} · {{ reminder.get_status_display }}</div>
+          <div class="list-actions">
+            <details class="inline-edit">
+              <summary>修改</summary>
+              <form method="post" action="{% url 'reminders:edit' reminder.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <div class="offset-input">
+                  <span class="small">提前</span>
+                  <input type="number" name="amount" min="0" value="{{ reminder.amount }}" required>
+                  <select name="unit">
+                    {% for value, label in reminder_units %}
+                      <option value="{{ value }}" {% if reminder.unit == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn secondary small" type="submit">保存</button>
+                </div>
+              </form>
+            </details>
+            <form method="post" action="{% url 'reminders:toggle' reminder.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="enabled" value="{% if reminder.is_enabled %}0{% else %}1{% endif %}">
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <button class="btn ghost small" type="submit">{% if reminder.is_enabled %}关闭{% else %}开启{% endif %}</button>
+            </form>
+            <form method="post" action="{% url 'reminders:delete' reminder.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <button class="btn ghost small" type="submit" data-confirm="删除这条提醒？">删除</button>
+            </form>
+          </div>
         </li>
       {% empty %}
-        <li class="muted small">未设置提醒，<a href="{% url 'reminders:list' %}">去设置</a></li>
+        <li class="muted small">还没有提醒。选一个提前量添加，到点后发到你的邮箱。</li>
       {% endfor %}
     </ul>
+
+    {% if event.deadline or event.start_at %}
+      <form method="post" action="{% url 'reminders:add' event.pk %}" class="add-reminder">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <div class="offset-input">
+          <span class="small">提前</span>
+          <input type="number" name="amount" min="0" value="1" required>
+          <select name="unit">
+            {% for value, label in reminder_units %}
+              <option value="{{ value }}" {% if value == 60 %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn small" type="submit">添加提醒</button>
+        </div>
+        <p class="small muted" style="margin:8px 0 0;">
+          按{{ event.deadline|yesno:"截止时间,开始时间" }}算，最多提前 30 天。
+        </p>
+      </form>
+    {% else %}
+      <p class="small muted">这条事项还没有截止或开始时间，先
+        <a href="{% url 'events:edit' event.pk %}">补上时间</a>才能设提醒。</p>
+    {% endif %}
   </div>
 
   <div class="card">
     <h3>相关原文</h3>
-    {% for link in links %}
+    <p class="small muted">高亮片段即该字段的识别依据。</p>
+    {% for block in original_blocks %}
       <div style="margin-bottom:14px;">
         <div class="list-item-head" style="margin-bottom:6px;">
-          <span class="tag muted">{{ link.get_relation_display }}</span>
-          {% if link.message.sender %}<span class="meta">{{ link.message.sender }}</span>{% endif %}
-          {% if link.message.sent_at %}<span class="meta">{{ link.message.sent_at|date:"m-d H:i" }}</span>{% endif %}
+          <span class="tag muted">{{ block.link.get_relation_display }}</span>
+          {% if block.link.message.sender %}<span class="meta">{{ block.link.message.sender }}</span>{% endif %}
+          {% if block.link.message.sent_at %}<span class="meta">{{ block.link.message.sent_at|date:"m-d H:i" }}</span>{% endif %}
         </div>
-        <div class="raw-text">{{ link.message.display_text }}</div>
-        {% if links|length > 1 and link.relation != "primary" %}
-          <form method="post" action="{% url 'events:detach' event.pk link.pk %}" style="margin-top:6px;">
+        <div class="raw-text">{{ block.link.message.raw_text|mark_evidence:block.annotations }}</div>
+        {% if original_blocks|length > 1 and block.link.relation != "primary" %}
+          <form method="post" action="{% url 'events:detach' event.pk block.link.pk %}" style="margin-top:6px;">
             {% csrf_token %}
             <button class="btn ghost small" type="submit"
                     data-confirm="把这条原文拆成独立事项？">拆出这条</button>

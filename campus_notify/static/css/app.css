@@ -120,6 +120,13 @@ h2, h3 { line-height: 1.35; letter-spacing: -0.01em; }
   background: var(--line-strong);
   margin: 0 6px;
 }
+/* 导航图标统一走 svg：不参与 flex 收缩，跟随文字颜色 */
+.nav svg {
+  display: block;
+  flex: none;
+  opacity: 0.85;
+}
+.nav a.active svg { opacity: 1; }
 
 .inline-form { display: inline; margin: 0; }
 .link-button {
@@ -449,8 +456,94 @@ select { cursor: pointer; }
 .tag.muted { background: var(--surface-sunken); color: var(--text-soft); }
 .tag + .tag { margin-left: 5px; }
 
-/* ---------------------------------------------------------------- 提示条 */
-.messages { list-style: none; padding: 0; margin: 0 0 18px; }
+/* ---------------------------------------------------------------- 轻提示 */
+/* 提示一律飘在角落里：position: fixed 让它脱离文档流，
+   放在 main 顶部会把整页内容挤下去，这正是要避免的。 */
+.toast-stack,
+.toast-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: none; /* 空容器与间隙不挡下面的按钮 */
+}
+.toast-stack {
+  --toast-top: 16px;
+  position: fixed;
+  top: var(--toast-top);
+  right: 16px;
+  z-index: 60;
+}
+/* 常驻提示停靠右下角：右上角是「导入 / 编辑 / 删除」这些操作按钮，长期挡住不合适 */
+.toast-dock {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+}
+.has-topbar .toast-stack { --toast-top: 66px; } /* 默认值；JS 会按顶栏实际高度覆盖 */
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 10px 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  animation: toast-in 0.2s ease-out;
+}
+.toast::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 4px;
+  align-self: stretch;
+  border-radius: 999px;
+  background: var(--text-faint);
+}
+.toast-text { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+.toast-close {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.toast-close:hover { background: var(--surface-sunken); color: var(--text); }
+
+.toast-success { border-color: #cdeedb; background: #f6fdf9; }
+.toast-success::before { background: var(--ok); }
+.toast-warning { border-color: #f2e0bf; background: #fffdf7; }
+.toast-warning::before { background: var(--warn); }
+.toast-error { border-color: #f5d2cf; background: #fffafa; }
+.toast-error::before { background: var(--danger); }
+.toast-info { border-color: #d5e2fb; background: #fafcff; }
+.toast-info::before { background: var(--accent); }
+
+.toast.is-leaving { animation: toast-out 0.18s ease-in forwards; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(14px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast, .toast.is-leaving { animation: none; }
+}
+
+/* 行内提示条：留给「就地说清楚」的场景（字段校验错误、开发模式验证码等） */
 .msg {
   display: flex;
   align-items: flex-start;
@@ -496,6 +589,21 @@ mark {
   color: inherit;
   padding: 0 2px;
   border-radius: 3px;
+}
+/* 就地证据标注：高亮片段后面跟一个字段名小标签，
+   替代原「识别依据」栏把整段原文按字段重复一遍的做法 */
+.ev-label {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-size: 11px;
+  line-height: 16px;
+  vertical-align: 1px;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .raw-text {
@@ -575,6 +683,9 @@ mark {
 }
 .calendar .cal-event:hover { background: #e2ebfd; color: var(--accent-dark); }
 .calendar .cal-event.is-deadline { background: var(--warn-soft); color: var(--warn); }
+/* 已完成/已结束的日程条目同样压成灰色 */
+.calendar .cal-event.is-closed { background: var(--surface-sunken); color: var(--text-faint); }
+.calendar .cal-event.is-closed:hover { background: var(--line); color: var(--text-soft); }
 
 /* ---------------------------------------------------------------- 登录 */
 .auth-wrap {
@@ -649,6 +760,15 @@ mark {
 }
 .add-reminder .offset-input { margin-top: 10px; }
 
+/* 提醒只挂在事项详情页：列表里每条自己带「修改 / 关闭 / 删除」，
+   卡片底部固定一个添加表单，右侧原文卡片不被拉长。 */
+.reminder-list > li + li {
+  border-top: 1px dashed var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.reminder-list .list-actions { margin-top: 6px; }
+
 details.inline-edit { display: inline-block; position: relative; }
 details.inline-edit > summary {
   cursor: pointer;
@@ -679,15 +799,28 @@ details.inline-edit[open] > summary { margin-bottom: 4px; }
 .strong { font-weight: 600; }
 .overdue { color: var(--danger); font-weight: 600; }
 .done { text-decoration: line-through; color: var(--text-faint); }
+
+/* 已完成 / 已取消 / 已过结束时间的事项：整条压成灰色。
+   颜色只用来区分状态——灰色即「这条已经收尾，不用再管了」。
+   状态标签保留原色，避免把「已完成」这类标记也一起糊掉。 */
+.is-closed,
+.is-closed td,
+.is-closed .title-link { color: var(--text-faint); }
+.is-closed .title-link { font-weight: 500; }
+.is-closed .title-link:hover { color: var(--text-soft); }
+.is-closed .meta { color: var(--text-faint); }
 .nowrap { white-space: nowrap; }
 .stack > * + * { margin-top: 10px; }
 .divider-line { height: 1px; background: var(--line); margin: 16px 0; border: 0; }
 
 @media (max-width: 720px) {
   .container { padding: 18px 14px 56px; }
+  .toast-stack, .toast-dock { left: 14px; right: 14px; width: auto; }
+  .toast-dock { bottom: 14px; }
   .topbar-inner { padding: 9px 14px; gap: 10px; }
   .nav { gap: 0; }
-  .nav a, .nav .link-button { padding: 6px 9px; font-size: 13.5px; }
+  .nav a, .nav .link-button { padding: 6px 9px; font-size: 13.5px; gap: 4px; }
+  .nav svg { width: 13px; height: 13px; }
   .card { padding: 15px; }
   .table-wrap { margin: 0 -15px; padding: 0 15px; }
   .calendar { border-spacing: 2px; }

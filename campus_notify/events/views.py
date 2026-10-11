@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import F, Q
+from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -33,11 +33,13 @@ from events.services import (
 from extraction.fields import (
     DATETIME_FIELDS,
     EVENT_COLUMNS,
+    FIELD_LABELS,
     FIELD_REQUIREMENT,
     RELATION_SUPPLEMENT,
 )
 from extraction.pipeline import detach_message
 from extraction.resolve import IncomingField, IngestPayload
+from reminders.services import OFFSET_UNIT_CHOICES, dispatch_due, offset_parts
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +49,6 @@ def _initial_from_event(event: Event) -> dict:
     values = {
         "title": event.title,
         "category": event.category,
-        "save_as_todo": event.saved_as_todo or bool(event.deadline),
-        "save_as_calendar": event.saved_as_calendar or bool(event.start_at or event.end_at),
         "reminder_offsets": [
             str(item.offset_minutes) for item in event.reminders.all()
         ]
@@ -91,28 +91,23 @@ def review(request: HttpRequest, pk: int) -> HttpResponse:
         if form.is_valid():
             values = form.cleaned_values()
             offsets = form.offsets()
-            as_todo = bool(form.cleaned_data.get("save_as_todo"))
-            as_calendar = bool(form.cleaned_data.get("save_as_calendar"))
 
             if form.cleaned_data.get("merge_choice") == "merge" and candidate is not None:
                 merge_events(event, candidate, relation=RELATION_SUPPLEMENT)
-                confirm_event(
-                    candidate, as_todo=as_todo or candidate.saved_as_todo,
-                    as_calendar=as_calendar or candidate.saved_as_calendar,
-                    reminder_offsets=offsets,
-                )
+                confirm_event(candidate, reminder_offsets=offsets)
                 messages.success(request, f"已合并到《{candidate.title}》，原文已并入该事项。")
                 return redirect("events:detail", pk=candidate.pk)
 
             set_fields_from_form(request.user, event, values, source="review")
-            confirm_event(event, as_todo=as_todo, as_calendar=as_calendar, reminder_offsets=offsets)
-            messages.success(request, "已保存为正式事项。")
+            confirm_event(event, reminder_offsets=offsets)
+            messages.success(request, "已保存，待办和日程里都能看到这条事项。")
             return redirect("events:detail", pk=event.pk)
     else:
         form = ReviewForm(
             prefix=f"e{event.pk}", initial=_initial_from_event(event), extra_offsets=existing_offsets
         )
 
+    original_blocks, attention = _original_evidence(event)
     return render(
         request,
         "events/review.html",
@@ -120,13 +115,50 @@ def review(request: HttpRequest, pk: int) -> HttpResponse:
             "event": event,
             "form": form,
             "candidate": candidate,
-            "links": event.links.select_related("message"),
-            "field_rows": _field_rows_with_evidence(event),
+            "original_blocks": original_blocks,
+            "attention": attention,
         },
     )
 
 
-def _field_rows_with_evidence(event: Event) -> list[dict]:
+def _original_evidence(event: Event) -> tuple[list[dict], list[dict]]:
+    """相关原文的就地证据标注 + 需要人工留意的字段，review / detail 共用。
+
+    返回 (blocks, attention)：
+    * blocks：每条相关原文，附上落在它身上的字段证据区间——证据直接标进原文，
+      「哪个值来自哪一句」一眼可见，不必再把整段原文按字段重复摆一遍；
+    * attention：未能在原文中定位到证据、或置信度偏低的字段。这是原「识别依据」栏
+      承担的信息，去掉那一栏后必须另找出口，否则歧义会被静默放过（NFR-05）。
+    """
+    annotations: dict[int, list[dict]] = defaultdict(list)
+    attention: list[dict] = []
+    for name in list(EVENT_COLUMNS) + [FIELD_REQUIREMENT]:
+        item = event.current_field(name)
+        if item is None:
+            continue
+        label = FIELD_LABELS.get(name, name)
+        bounds = item.span
+        message = item.source_message
+        if bounds and bounds[1] > bounds[0] and message is not None and not message.raw_discarded:
+            annotations[message.pk].append(
+                {"start": bounds[0], "end": bounds[1], "label": label}
+            )
+            if item.confidence < 0.6:
+                attention.append(
+                    {"name": label, "reason": f"置信度偏低 {round(item.confidence * 100)}%"}
+                )
+        else:
+            attention.append({"name": label, "reason": "未在原文中定位到证据"})
+
+    blocks = [
+        {"link": link, "annotations": annotations.get(link.message_id, [])}
+        for link in event.links.select_related("message")
+    ]
+    return blocks, attention
+
+
+def _field_rows(event: Event) -> list[dict]:
+    """字段当前值 + 置信度 + 来源，供详情页表格。"""
     rows = []
     for name in list(EVENT_COLUMNS) + [FIELD_REQUIREMENT]:
         item = event.current_field(name)
@@ -136,7 +168,6 @@ def _field_rows_with_evidence(event: Event) -> list[dict]:
             {
                 "name": name,
                 "field": item,
-                "evidence": item.evidence_text,
                 "message": item.source_message,
                 "confidence": item.confidence,
             }
@@ -159,6 +190,7 @@ def review_list(request: HttpRequest) -> HttpResponse:
 # ---------------------------------------------------------------------------
 @login_required
 def event_list(request: HttpRequest) -> HttpResponse:
+    """US-10：事项总列表，按时间排序（截止优先，没有截止才看开始）。"""
     form = QuickFilterForm(request.GET or None)
     queryset = _user_events(request).exclude(status=Event.Status.DRAFT)
     if form.is_valid():
@@ -168,11 +200,15 @@ def event_list(request: HttpRequest) -> HttpResponse:
             queryset = queryset.filter(title__icontains=keyword)
         if category:
             queryset = queryset.filter(category=category)
-    queryset = queryset.order_by("-last_updated_at")
+    queryset = queryset.order_by_time()
     return render(
         request,
         "events/list.html",
-        {"events": queryset[:200], "form": form, "draft_count": _user_events(request).filter(status=Event.Status.DRAFT).count()},
+        {
+            "events": queryset[:200],
+            "form": form,
+            "draft_count": _user_events(request).filter(status=Event.Status.DRAFT).count(),
+        },
     )
 
 
@@ -188,7 +224,10 @@ def todo_list(request: HttpRequest) -> HttpResponse:
         queryset = queryset.filter(todo_status=Event.TodoStatus.DONE)
     if category:
         queryset = queryset.filter(category=category)
-    queryset = queryset.order_by(F("deadline").asc(nulls_last=True), "-last_updated_at")
+    # 排序与事项列表共用同一把时间尺子（events/models.py::EventQuerySet.order_by_time）：
+    # 有截止时间的按截止排，只有开始时间的活动（讲座、比赛）按开始时间排，
+    # 否则它们会因为没有截止时间而全部沉到列表底部。
+    queryset = queryset.order_by_time()
     done_count = _user_events(request).filter(
         saved_as_todo=True,
         status=Event.Status.CONFIRMED,
@@ -282,6 +321,10 @@ def _deadline_or_start_q(range_start, range_end):
 # ---------------------------------------------------------------------------
 @login_required
 def detail(request: HttpRequest, pk: int) -> HttpResponse:
+    # FR-08/NFR-04：提醒管理就在这一页（不再有独立的提醒页），
+    # 打开即可见每条提醒的真实状态；顺带派发到点提醒（离线恢复的补偿也走这里）。
+    # 必须先派发再读提醒，否则页面上会停留在派发前的旧状态。
+    fired = dispatch_due(user=request.user, request=request)
     event = get_object_or_404(
         _user_events(request).prefetch_related("fields__source_message", "links__message", "reminders"),
         pk=pk,
@@ -289,15 +332,25 @@ def detail(request: HttpRequest, pk: int) -> HttpResponse:
     history = defaultdict(list)
     for item in event.fields.filter(is_current=False).order_by("-valid_from"):
         history[item.field].append(item)
+    original_blocks, _attention = _original_evidence(event)
+    # prefetch 是在派发之前进的缓存，这里刷新一下才能显示刚送达的状态
+    reminders = []
+    for reminder in event.reminders.all():
+        reminder.refresh_from_db()
+        # 每条提醒都带上「数量 + 单位」，页面据此渲染成可编辑的输入框
+        reminder.amount, reminder.unit = offset_parts(reminder.offset_minutes)
+        reminders.append(reminder)
     return render(
         request,
         "events/detail.html",
         {
             "event": event,
-            "field_rows": _field_rows_with_evidence(event),
-            "links": event.links.select_related("message"),
+            "field_rows": _field_rows(event),
+            "original_blocks": original_blocks,
             "history": dict(history),
-            "reminders": event.reminders.all(),
+            "reminders": reminders,
+            "reminder_units": OFFSET_UNIT_CHOICES,
+            "reminder_fired": fired,
             "now": timezone.now(),
         },
     )
@@ -452,14 +505,9 @@ def create(request: HttpRequest) -> HttpResponse:
                 raw_text="",
             )
             event = create_event(request.user, payload, status=Event.Status.DRAFT)
-            confirm_event(
-                event,
-                as_todo=bool(form.cleaned_data.get("save_as_todo")),
-                as_calendar=bool(form.cleaned_data.get("save_as_calendar")),
-                reminder_offsets=form.offsets(),
-            )
-            messages.success(request, "已新建事项。")
+            confirm_event(event, reminder_offsets=form.offsets())
+            messages.success(request, "已新建事项，待办和日程里都能看到。")
             return redirect("events:detail", pk=event.pk)
     else:
-        form = ManualEventForm(prefix="new", initial={"save_as_todo": True})
+        form = ManualEventForm(prefix="new")
     return render(request, "events/create.html", {"form": form})

@@ -38,13 +38,6 @@ def home(request: HttpRequest) -> HttpResponse:
         {
             "drafts": drafts,
             "draft_count": Event.objects.for_user(request.user).filter(status=Event.Status.DRAFT).count(),
-            "overdue_todos": Event.objects.for_user(request.user).filter(
-                saved_as_todo=True,
-                status=Event.Status.CONFIRMED,
-                is_cancelled=False,
-                todo_status=Event.TodoStatus.PENDING,
-                deadline__lt=timezone.now(),
-            )[:10],
             "stats": count_user_data(request.user),
             "now": timezone.now(),
             **data,

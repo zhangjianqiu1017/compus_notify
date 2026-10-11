@@ -4,7 +4,9 @@
 <div class="page-head">
   <div>
     <h1>事项</h1>
-    <p class="sub">共 {{ events|length }} 条</p>
+    <p class="sub">共 {{ events|length }} 条 · 按时间排序
+      <span class="muted" title="有截止时间按截止时间排，没有截止时间的按开始时间排">（截止/开始）</span>
+    </p>
   </div>
   <div class="actions">
     {% if draft_count %}<a class="btn secondary" href="{% url 'events:review_list' %}">待确认 {{ draft_count }}</a>{% endif %}
@@ -54,7 +56,7 @@
           </thead>
           <tbody>
             {% for event in events %}
-            <tr>
+            <tr class="{% if event.is_closed %}is-closed{% endif %}">
               <td><input type="checkbox" name="ids" value="{{ event.pk }}" data-row-checkbox
                          aria-label="选择《{{ event.title }}》"></td>
               <td>
@@ -72,9 +74,10 @@
                 {% if not event.deadline and not event.start_at %}<span class="muted">—</span>{% endif %}
               </td>
               <td class="small">
-                {{ event.get_status_display }}
-                {% if event.saved_as_todo %}· {{ event.get_todo_status_display }}{% endif %}
-                {% if event.is_cancelled %}<span class="tag danger">已取消</span>{% endif %}
+                {# 已确认/已归档对用户没有信息量：这里只说这条事要做什么 #}
+                {{ event.get_todo_status_display }}
+                {% if event.is_cancelled %}<span class="tag danger">已取消</span>
+                {% elif event.is_ended %}<span class="tag muted">已结束</span>{% endif %}
               </td>
               <td>
                 <div class="btn-row">

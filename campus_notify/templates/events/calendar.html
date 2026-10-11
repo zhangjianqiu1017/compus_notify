@@ -26,7 +26,7 @@
         <td class="{% if not cell.in_month %}out-of-month{% endif %} {% if cell.is_today %}today{% endif %}">
           <div class="day-num">{{ cell.date|date:"n/j" }}</div>
           {% for event in cell.events %}
-            <a class="cal-event {% if not event.start_at %}is-deadline{% endif %}"
+            <a class="cal-event {% if not event.start_at %}is-deadline{% endif %} {% if event.is_closed %}is-closed{% endif %}"
                href="{% url 'events:detail' event.pk %}"
                title="{{ event.title }}{% if event.deadline %}（截止 {{ event.deadline|date:'m-d H:i' }}）{% endif %}">
               {% if event.start_at %}{{ event.start_at|date:"H:i" }} {% endif %}{{ event.title }}
@@ -38,6 +38,6 @@
       {% endfor %}
     </tbody>
   </table>
-  <p class="small muted" style="margin:12px 0 0;">橙色为截止，蓝色为日程。</p>
+  <p class="small muted" style="margin:12px 0 0;">橙色为截止，蓝色为日程，灰色为已完成或已结束。</p>
 </div>
 {% endblock %}

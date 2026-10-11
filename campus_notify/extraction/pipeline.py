@@ -44,6 +44,19 @@ class ProcessedEvent:
 
 
 @dataclass
+class _BatchEntry:
+    """本批次内已经落库的草稿，附带它占了哪些原文。
+
+    原文集合是「同一条消息拆成多个阶段事项」时唯一的判据来源：
+    共享原文 + 锚点不同 = 同一条通知的两个阶段，不能被并回一件。
+    """
+
+    event: Event
+    snapshot: EventSnapshot
+    message_ids: set[int]
+
+
+@dataclass
 class BatchResult:
     batch: object
     provider: str
@@ -149,6 +162,28 @@ def _review_reasons(payload: IngestPayload, extracted: ExtractedEvent) -> list[s
     return reasons
 
 
+def _message_ids(payload: IngestPayload) -> set[int]:
+    return {message.pk for message, _relation in payload.message_links if message is not None}
+
+
+def _best_sibling(siblings: list[Event], snapshot: EventSnapshot) -> tuple[Event, float]:
+    """同一条原文已经属于多个事项时，挑出这次识别结果最匹配的那个阶段。
+
+    同一条通知拆成「提交 / 汇报」两个事项后，这条原文就同时挂在两个事项上，
+    不能再无条件并回其中任意一个（否则提交阶段的截止时间会被灌进汇报阶段）。
+    分数足够高说明确实对上了同一阶段，才按「原本就属于它」处理；
+    落在灰区时保留真实分数，交给用户在确认页拍板（NFR-05）。
+    """
+    scored = [
+        (event, merge_mod.score_pair(merge_mod.snapshot_from_event(event), snapshot)[0])
+        for event in siblings
+    ]
+    scored.sort(key=lambda item: item[1], reverse=True)
+    event, score = scored[0]
+    auto = float(getattr(settings, "MERGE_AUTO_THRESHOLD", 0.86))
+    return event, (1.0 if score >= auto else score)
+
+
 def process_batch(batch, *, provider=None, apply_merge: bool = True) -> BatchResult:
     """执行一次完整识别；返回各事件的处理结果。"""
     from extraction.models import ExtractionRun
@@ -191,15 +226,15 @@ def process_batch(batch, *, provider=None, apply_merge: bool = True) -> BatchRes
     fallback_message = messages[0]
 
     # 本批次内已处理的事项也参与归并 —— 一次粘贴的多条消息理应互相补充
-    batch_snapshots: list[tuple[Event, EventSnapshot]] = []
+    batch_snapshots: list[_BatchEntry] = []
     processed: list[ProcessedEvent] = []
 
     # 已经属于某个事项的原文（重复导入 / 重新识别）必然归回原事项，
     # 否则「重新识别」会凭空多出一条重复草稿。
-    linked_events = {
-        link.message_id: link.event
-        for link in EventMessage.objects.filter(message__in=messages).select_related("event")
-    }
+    # 一条原文挂多个事项是合法的（同一条通知的多个阶段），所以这里是「一对多」。
+    linked_events: dict[int, list[Event]] = {}
+    for link in EventMessage.objects.filter(message__in=messages).select_related("event"):
+        linked_events.setdefault(link.message_id, []).append(link.event)
 
     for extracted in outcome.events:
         payload = build_payload(extracted, messages_by_seq, fallback_message)
@@ -210,25 +245,47 @@ def process_batch(batch, *, provider=None, apply_merge: bool = True) -> BatchRes
             source_key=_source_key(payload.message_links),
             **hint,
         )
+        incoming_message_ids = _message_ids(payload)
 
         candidates: list[tuple[Event, float, list[str], bool]] = []
-        for event, snap in batch_snapshots:
-            score, reasons = merge_mod.score_pair(snap, snapshot)
-            candidates.append((event, score, reasons, True))
+        for entry in batch_snapshots:
+            # 同一条原文拆出来的两个阶段（先提交、后汇报）：共享课程/来源/措辞，
+            # 相似度打分足以把它们并回一件，必须先用锚点硬规则挡住。
+            if entry.message_ids & incoming_message_ids and merge_mod.anchors_conflict(
+                entry.snapshot, snapshot
+            ):
+                continue
+            score, reasons = merge_mod.score_pair(entry.snapshot, snapshot)
+            candidates.append((entry.event, score, reasons, True))
         for event, score, reasons in merge_mod.recall_candidates(owner, snapshot):
             candidates.append((event, score, reasons, False))
         for message, _relation in payload.message_links:
-            linked = linked_events.get(message.pk)
-            if linked is None:
+            if message is None:
                 continue
-            hint_reason = "该原文已属于此事项，识别结果直接并入"
+            siblings = linked_events.get(message.pk) or []
+            if not siblings:
+                continue
+            if len(siblings) == 1:
+                linked, linked_score = siblings[0], 1.0
+                hint_reason = "该原文已属于此事项，识别结果直接并入"
+            else:
+                linked, linked_score = _best_sibling(siblings, snapshot)
+                hint_reason = "该原文已属于此事项，识别结果并入最匹配的阶段"
+            if merge_mod.anchor_kind_differs(merge_mod.snapshot_from_event(linked), snapshot):
+                # 原文虽已关联该事项，但这次识别出的是另一个阶段（截止 vs 开始）。
+                # 强制并入会让一个事项同时带 deadline 和 start_at，提醒只按 deadline 排，
+                # 另一个阶段彻底没提醒 —— 交回相似度判定，宁可多一条草稿让用户拍板。
+                continue
             for index, item in enumerate(candidates):
                 if item[0].pk == linked.pk:
                     # 就地提升为确定命中：否则「重新识别」可能落进灰区另建一条草稿
-                    candidates[index] = (linked, 1.0, [*item[2], hint_reason], item[3])
+                    if linked_score >= item[1]:
+                        candidates[index] = (
+                            linked, linked_score, [*item[2], hint_reason], item[3],
+                        )
                     break
             else:
-                candidates.append((linked, 1.0, [hint_reason], False))
+                candidates.append((linked, linked_score, [hint_reason], False))
         candidates.sort(key=lambda item: item[1], reverse=True)
 
         best = candidates[0] if candidates else None
@@ -285,9 +342,13 @@ def process_batch(batch, *, provider=None, apply_merge: bool = True) -> BatchRes
                     note=forced_reason or decide_reason(score, reasons),
                 )
             )
-            for index, (event, _snap) in enumerate(batch_snapshots):
-                if event.pk == target.pk:
-                    batch_snapshots[index] = (target, merge_mod.snapshot_from_event(target))
+            for index, entry in enumerate(batch_snapshots):
+                if entry.event.pk == target.pk:
+                    batch_snapshots[index] = _BatchEntry(
+                        event=target,
+                        snapshot=merge_mod.snapshot_from_event(target),
+                        message_ids=entry.message_ids | incoming_message_ids,
+                    )
             continue
 
         review_reasons = _review_reasons(payload, extracted)
@@ -306,7 +367,13 @@ def process_batch(batch, *, provider=None, apply_merge: bool = True) -> BatchRes
             review_note="；".join(review_reasons)[:300],
         )
         refresh_denormalized(event)
-        batch_snapshots.append((event, merge_mod.snapshot_from_event(event)))
+        batch_snapshots.append(
+            _BatchEntry(
+                event=event,
+                snapshot=merge_mod.snapshot_from_event(event),
+                message_ids=incoming_message_ids,
+            )
+        )
         processed.append(
             ProcessedEvent(
                 event=event,

@@ -30,7 +30,7 @@ class ReminderTests(TestCase):
 
     def test_default_offsets_created_on_confirm(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False)  # offsets=None → 使用默认模板
+        confirm_event(event)  # offsets=None → 使用默认模板
         offsets = sorted(item.offset_minutes for item in event.reminders.all())
         self.assertEqual(offsets, [120, 1440])
         reminder = event.reminders.get(offset_minutes=1440)
@@ -43,12 +43,12 @@ class ReminderTests(TestCase):
         if not result.drafts:
             self.skipTest("该通知未生成草稿")
         event = result.drafts[0]
-        confirm_event(event, as_todo=False, as_calendar=True)
+        confirm_event(event)
         self.assertEqual(event.reminders.count(), 0)
 
     def test_dispatch_fires_and_creates_notification(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         fired = dispatch_due(user=self.user, now=reminder.remind_at + timedelta(seconds=1))
         self.assertEqual(fired, 1)
@@ -60,7 +60,7 @@ class ReminderTests(TestCase):
 
     def test_dispatch_is_idempotent(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         moment = reminder.remind_at + timedelta(seconds=1)
         self.assertEqual(dispatch_due(user=self.user, now=moment), 1)
@@ -69,7 +69,7 @@ class ReminderTests(TestCase):
     def test_overdue_reminder_is_compensated(self):
         """离线期间到点的提醒，下次打开页面时补偿派发（并标记为已过期）。"""
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         fired = dispatch_due(user=self.user, now=reminder.remind_at + timedelta(days=1, minutes=1))
         self.assertEqual(fired, 1)
@@ -79,7 +79,7 @@ class ReminderTests(TestCase):
 
     def test_imminent_reminder_is_marked_warn(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[120])
+        confirm_event(event, reminder_offsets=[120])
         reminder = event.reminders.first()
         fired = dispatch_due(user=self.user, now=reminder.remind_at + timedelta(seconds=1))
         self.assertEqual(fired, 1)
@@ -89,7 +89,7 @@ class ReminderTests(TestCase):
 
     def test_too_old_reminder_is_dropped_not_spammed(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         fired = dispatch_due(user=self.user, now=reminder.remind_at + timedelta(days=10))
         self.assertEqual(fired, 0)
@@ -98,7 +98,7 @@ class ReminderTests(TestCase):
 
     def test_time_change_reschedules_sent_reminder(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         dispatch_due(user=self.user, now=reminder.remind_at + timedelta(seconds=1))
         reminder.refresh_from_db()
@@ -113,7 +113,7 @@ class ReminderTests(TestCase):
 
     def test_completed_todo_disables_reminders(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         complete_todo(event)
         self.assertEqual(event.reminders.filter(status=Reminder.Status.SCHEDULED).count(), 0)
         fired = dispatch_due(user=self.user, now=timezone.now() + timedelta(days=1))
@@ -121,14 +121,14 @@ class ReminderTests(TestCase):
 
     def test_custom_offsets_replace_defaults(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440, 120])
+        confirm_event(event, reminder_offsets=[1440, 120])
         set_reminder_offsets(event, [60])
         offsets = [item.offset_minutes for item in event.reminders.all()]
         self.assertEqual(offsets, [60])
 
     def test_toggle_reminder(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         toggle_reminder(reminder, False)
         reminder.refresh_from_db()
@@ -138,21 +138,63 @@ class ReminderTests(TestCase):
         reminder.refresh_from_db()
         self.assertTrue(reminder.is_enabled)
 
-    def test_reminder_list_view_dispatches_and_renders(self):
+    def test_view_round_trip_on_event_detail_page(self):
+        """提醒不再有独立页面：详情页里能加、能改、能关、能删，且状态一眼可见。"""
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[0])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
-        # 把触发时间挪到过去，模拟离线恢复
+
+        detail = self.client.get(reverse("events:detail", args=[event.pk]))
+        self.assertEqual(detail.status_code, 200)
+        self.assertContains(detail, "截止前 1 天")
+        self.assertContains(detail, "添加提醒")
+
+        # 改：1 天 → 2 小时
+        self.client.post(
+            reverse("reminders:edit", args=[reminder.pk]), {"amount": "2", "unit": "60"}
+        )
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.offset_minutes, 120)
+        self.assertContains(
+            self.client.get(reverse("events:detail", args=[event.pk])), "截止前 2 小时"
+        )
+
+        # 关 → 详情页标「已关闭」
+        self.client.post(reverse("reminders:toggle", args=[reminder.pk]), {"enabled": "0"})
+        self.assertContains(
+            self.client.get(reverse("events:detail", args=[event.pk])), "已关闭"
+        )
+
+        # 删 → 回到「还没有提醒」的空态
+        self.client.post(reverse("reminders:delete", args=[reminder.pk]))
+        self.assertFalse(event.reminders.exists())
+        self.assertContains(
+            self.client.get(reverse("events:detail", args=[event.pk])), "还没有提醒"
+        )
+
+    def test_event_detail_dispatches_due_reminders(self):
+        """打开事项详情页即派发到点提醒（离线恢复的补偿也走这里），并显示为已送达。"""
+        event = self._event()
+        confirm_event(event, reminder_offsets=[1440])
+        reminder = event.reminders.first()
+        # 把触发时间挪到刚刚过去，模拟离线期间错过、回来还能补上的那条
         reminder.remind_at = timezone.now() - timedelta(minutes=5)
         reminder.save(update_fields=["remind_at"])
-        response = self.client.get(reverse("reminders:list"))
+
+        response = self.client.get(reverse("events:detail", args=[event.pk]))
+
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "已送达 1 条提醒")
+        self.assertContains(response, "已送达")
+        self.assertEqual(
+            InAppNotification.objects.filter(owner=self.user, event=event).count(), 1
+        )
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.status, Reminder.Status.SENT)
 
     def test_add_reminder_via_view(self):
         """「添加提醒」：一次加一条，不影响已有的。"""
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         response = self.client.post(
             reverse("reminders:add", args=[event.pk]), {"amount": "2", "unit": "60"}
         )
@@ -162,7 +204,7 @@ class ReminderTests(TestCase):
 
     def test_add_duplicate_reminder_is_rejected(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         response = self.client.post(
             reverse("reminders:add", args=[event.pk]), {"amount": "1", "unit": "1440"}, follow=True
         )
@@ -171,7 +213,7 @@ class ReminderTests(TestCase):
 
     def test_add_reminder_rejects_invalid_input(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         response = self.client.post(
             reverse("reminders:add", args=[event.pk]), {"amount": "999", "unit": "1440"}, follow=True
         )
@@ -181,7 +223,7 @@ class ReminderTests(TestCase):
     def test_edit_reminder_via_view(self):
         """修改某一条：只动那一条。"""
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440, 120])
+        confirm_event(event, reminder_offsets=[1440, 120])
         reminder = event.reminders.get(offset_minutes=1440)
         response = self.client.post(
             reverse("reminders:edit", args=[reminder.pk]), {"amount": "3", "unit": "60"}
@@ -195,7 +237,7 @@ class ReminderTests(TestCase):
 
     def test_edit_reminder_reschedules_after_sent(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         dispatch_due(user=self.user, now=reminder.remind_at + timedelta(seconds=1))
         reminder.refresh_from_db()
@@ -209,7 +251,7 @@ class ReminderTests(TestCase):
 
     def test_edit_to_existing_offset_is_rejected(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440, 120])
+        confirm_event(event, reminder_offsets=[1440, 120])
         reminder = event.reminders.get(offset_minutes=1440)
         response = self.client.post(
             reverse("reminders:edit", args=[reminder.pk]), {"amount": "2", "unit": "60"}, follow=True
@@ -220,7 +262,7 @@ class ReminderTests(TestCase):
 
     def test_add_reminder_without_anchor_fails_gracefully(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[])
+        confirm_event(event, reminder_offsets=[])
         event.deadline = None
         event.save(update_fields=["deadline"])
         response = self.client.post(
@@ -232,7 +274,7 @@ class ReminderTests(TestCase):
     def test_edit_page_keeps_custom_offset_choice(self):
         """自定义提前量必须在编辑页有对应选项，否则保存时会被清掉。"""
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         reminder = event.reminders.first()
         self.client.post(reverse("reminders:edit", args=[reminder.pk]), {"amount": "3", "unit": "60"})
 
@@ -252,7 +294,6 @@ class ReminderTests(TestCase):
             f"{prefix}-deadline": "2026-10-20T23:59",
             f"{prefix}-start_at": "",
             f"{prefix}-end_at": "",
-            f"{prefix}-save_as_todo": "on",
             f"{prefix}-reminder_offsets": ["180"],
         }
         self.client.post(reverse("events:edit", args=[event.pk]), data)
@@ -273,7 +314,7 @@ class ReminderTests(TestCase):
 
     def test_api_notifications_endpoint(self):
         event = self._event()
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[0])
+        confirm_event(event, reminder_offsets=[0])
         reminder = event.reminders.first()
         reminder.remind_at = timezone.now() - timedelta(minutes=1)
         reminder.save(update_fields=["remind_at"])
@@ -302,7 +343,7 @@ class ReminderEmailTests(TestCase):
             self.user, "【程序设计竞赛报名】\n请于10月20日前完成报名"
         )
         event = process_batch(batch).drafts[0]
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=list(offsets))
+        confirm_event(event, reminder_offsets=list(offsets))
         return event.reminders.first()
 
     def test_dispatch_sends_email_to_user(self):
@@ -415,7 +456,7 @@ class ReminderEmailTests(TestCase):
         )
         event = process_batch(batch).drafts[0]
         confirm_event(
-            event, as_todo=True, as_calendar=False, reminder_offsets=[1440, 120, 60, 0]
+            event, reminder_offsets=[1440, 120, 60, 0]
         )
         # 四条提醒全部到点：默认「提前量落到现在」，所以 now 要晚于最晚的那条
         now = max(item.remind_at for item in event.reminders.all()) + timedelta(seconds=1)

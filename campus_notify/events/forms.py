@@ -15,7 +15,7 @@ TEXT_FIELDS = ("course", "location", "organizer", "link", "contact")
 def reminder_option_choices(extra_offsets=()) -> list[tuple[str, str]]:
     """可选提醒点。
 
-    extra_offsets 用于带上该事项已有的自定义提前量：用户在提醒页把提醒改成
+    extra_offsets 用于带上该事项已有的自定义提前量：用户在事项详情页把提醒改成
     「提前 3 小时」之后，编辑页必须能表示这个值，否则保存时会把它清掉。
     """
     presets = {0, 15, 30, 60, 120, 240, 720, 1440, 2880, 10080}
@@ -43,6 +43,11 @@ def default_reminder_selection(has_deadline: bool) -> list[str]:
 
 
 class EventFormMixin(forms.Form):
+    """事项字段表单基类。
+
+    这里刻意没有「保存为待办 / 保存为日程」开关：确认即同时进入待办与日程，
+    见 `Event.confirm`。
+    """
     title = forms.CharField(label="事件名", max_length=200)
     category = forms.ChoiceField(label="分类", choices=CATEGORY_CHOICES)
     course = forms.CharField(label="课程", required=False, max_length=120)
@@ -56,8 +61,6 @@ class EventFormMixin(forms.Form):
     deadline = forms.CharField(label="截止时间", required=False, widget=_DATETIME_WIDGET)
     start_at = forms.CharField(label="开始时间", required=False, widget=_DATETIME_WIDGET)
     end_at = forms.CharField(label="结束时间", required=False, widget=_DATETIME_WIDGET)
-    save_as_todo = forms.BooleanField(label="保存为待办", required=False)
-    save_as_calendar = forms.BooleanField(label="保存为日程", required=False)
     reminder_offsets = forms.MultipleChoiceField(
         label="提醒时间", required=False, widget=forms.CheckboxSelectMultiple
     )

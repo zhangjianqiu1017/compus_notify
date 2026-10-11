@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from django.db.models import F
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from extraction.fields import (
@@ -20,6 +22,18 @@ class EventQuerySet(models.QuerySet):
         if not user.is_authenticated:
             return self.none()
         return self.filter(owner=user)
+
+    def order_by_time(self):
+        """US-10：按时间排序（截止优先，没有截止才看开始）。
+
+        有截止时间的事项（作业、报名）按截止时间排——那才是必须动手的时刻，
+        此时开始时间不参与排序；没有截止时间的事项（考试、讲座、比赛）按开始
+        时间排，否则它们会因为没有截止时间而全部沉到列表底部。
+        两个时间都没填的排最后。
+        """
+        return self.annotate(time_anchor=Coalesce("deadline", "start_at")).order_by(
+            F("time_anchor").asc(nulls_last=True), "-last_updated_at", "-id"
+        )
 
 
 class Event(models.Model):
@@ -52,7 +66,7 @@ class Event(models.Model):
     start_at = models.DateTimeField(null=True, blank=True, db_index=True)
     end_at = models.DateTimeField(null=True, blank=True)
 
-    # FR-06 / FR-07：用户确认时决定保存为待办 / 日程
+    # FR-06 / FR-07：事项一经确认即同时进入待办与日程，用户不必选择
     saved_as_todo = models.BooleanField(default=False)
     saved_as_calendar = models.BooleanField(default=False)
     todo_status = models.CharField(
@@ -116,6 +130,36 @@ class Event(models.Model):
             return False
         return anchor < timezone.now()
 
+    @property
+    def overdue_kind(self) -> str:
+        """哪一个时间点让这条事项过期了：deadline / start_at / 空串（没过期）。
+
+        列表里只把这个时间点标红，避免只看截止时间而漏掉活动开始时间。
+        """
+        if not self.overdue:
+            return ""
+        return "deadline" if self.deadline else "start_at"
+
+    @property
+    def is_ended(self) -> bool:
+        """结束时间已经过去。没填结束时间时退化为看开始时间。"""
+        anchor = self.end_at or self.start_at
+        return anchor is not None and anchor < timezone.now()
+
+    @property
+    def is_closed(self) -> bool:
+        """事项是否已经完成/结束：列表里整条弱化成灰色，一眼看出不必再处理。
+
+        覆盖四种收尾方式：待办已完成、通知已取消、事项已归档、时间已过。
+        注意「已过期」的待办（还没做完但截止时间过了）不算结束，仍要红色提醒。
+        """
+        return (
+            self.todo_status == self.TodoStatus.DONE
+            or self.is_cancelled
+            or self.status == self.Status.ARCHIVED
+            or self.is_ended
+        )
+
     def source_key(self) -> str:
         """来源指纹：用于判断是否同一渠道发布。"""
         links = list(self.links.all()[:1])
@@ -143,15 +187,17 @@ class Event(models.Model):
     def relation_labels(self) -> list[str]:
         return [RELATION_LABELS.get(link.relation, link.relation) for link in self.links.all()]
 
-    def confirm(self, *, as_todo: bool, as_calendar: bool) -> None:
+    def confirm(self) -> None:
+        """确认门通过。
+
+        确认即同时进入待办与日程两个视图（同一份数据的两种看法），
+        用户不需要在确认时勾选保存方式；已完成的事项保持完成状态。
+        """
         self.status = self.Status.CONFIRMED
-        self.saved_as_todo = as_todo
-        self.saved_as_calendar = as_calendar
-        if as_todo:
-            if self.todo_status == self.TodoStatus.NONE:
-                self.todo_status = self.TodoStatus.PENDING
-        elif self.todo_status != self.TodoStatus.DONE:
-            self.todo_status = self.TodoStatus.NONE
+        self.saved_as_todo = True
+        self.saved_as_calendar = True
+        if self.todo_status != self.TodoStatus.DONE:
+            self.todo_status = self.TodoStatus.PENDING
 
 
 class EventField(models.Model):

@@ -178,6 +178,47 @@ def _time_delta(a: EventSnapshot, b: EventSnapshot) -> timedelta | None:
     return None
 
 
+def primary_anchor(snapshot: EventSnapshot) -> tuple[str | None, datetime | None]:
+    """事项的主时间锚点：截止优先，其次开始时间。
+
+    与 reminders.services.anchor_for_event 保持同一口径 —— 一个事项只服务一个锚点，
+    所以「锚点不同」就等于「这是两件要分别提醒的事」。
+    """
+    if snapshot.deadline:
+        return FIELD_DEADLINE, snapshot.deadline
+    if snapshot.start_at:
+        return FIELD_START_AT, snapshot.start_at
+    return None, None
+
+
+def anchor_kind_differs(a: EventSnapshot, b: EventSnapshot) -> bool:
+    """两个画像的主锚点是不是「不同角色」：一个是截止、一个是开始。
+
+    这正是「先提交材料、后课堂汇报」的签名。此时合并会把两个阶段挤进一个事项，
+    而一个事项只编排一套提醒（截止优先），后一个阶段会彻底丢掉提醒。
+    """
+    left_kind, _ = primary_anchor(a)
+    right_kind, _ = primary_anchor(b)
+    if left_kind is None or right_kind is None:
+        return False
+    return left_kind != right_kind
+
+
+def anchors_conflict(a: EventSnapshot, b: EventSnapshot) -> bool:
+    """锚点是否指向不同阶段：角色不同，或同类锚点取值不同。
+
+    取自同一条原文的多个阶段事项天然共享课程、来源与措辞，
+    只靠相似度打分很容易被并回一件，因此同批次内必须先用这条硬规则挡住。
+    """
+    left_kind, left_dt = primary_anchor(a)
+    right_kind, right_dt = primary_anchor(b)
+    if left_kind is None or right_kind is None:
+        return False
+    if left_kind != right_kind:
+        return True
+    return left_dt != right_dt
+
+
 def decide(score: float) -> str:
     auto = float(getattr(settings, "MERGE_AUTO_THRESHOLD", 0.86))
     new = float(getattr(settings, "MERGE_NEW_THRESHOLD", 0.55))

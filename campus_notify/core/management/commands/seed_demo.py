@@ -91,7 +91,7 @@ class Command(BaseCommand):
 
             if index == 0 and CONFIRM_FIRST:
                 for event in result.drafts:
-                    confirm_event(event, as_todo=True, as_calendar=True)
+                    confirm_event(event)
                     total_events += 1
                     self.stdout.write(f"  已确认：{event.title}")
             else:

@@ -7,7 +7,7 @@ from reminders import views
 app_name = "reminders"
 
 urlpatterns = [
-    path("", views.reminder_list, name="list"),
+    # 提醒没有独立页面：每条提醒都在其事项详情页里增改删，这里只留操作端点与站内通知
     path("notifications/", views.notification_list, name="notifications"),
     path("notifications/<int:pk>/read/", views.mark_read, name="mark_read"),
     path("notifications/read-all/", views.mark_read, name="mark_all_read"),

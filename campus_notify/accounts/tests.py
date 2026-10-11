@@ -1,4 +1,4 @@
-"""账号单测：邮箱验证码注册、邮箱/账号登录、邮箱找回密码。
+﻿"""账号单测：邮箱验证码注册、邮箱/账号密码登录、邮箱验证码登录。
 
 测试用的邮件后端被 settings 强制为 locmem，所以既不会真的发信，
 也能从 mail.outbox 里取出验证码做断言。
@@ -108,6 +108,29 @@ class CodeServiceTests(TestCase):
             verify_code(self.email, "register", code)
         self.assertIn("已使用", str(ctx.exception))
 
+    def test_used_code_does_not_block_resend(self):
+        """回归：用过的码不该继续触发 60 秒重发冷却。
+
+        注册成功就会消费掉注册码（used_at 被写上），此时库里留着的是一条废码。
+        如果还按它的 created_at 算冷却，用户注销账号后用同一邮箱重新注册时，
+        会在「发送验证码」这一步被「发送太频繁」挡住，看起来就像邮箱被永久占用。
+        """
+        issue_code(self.email, "register")
+        consume_code(self.email, "register")
+        self.assertEqual(seconds_until_resend(self.email, "register"), 0)
+        # 用过的码不挡发码
+        issue_code(self.email, "register")
+        self.assertEqual(len(mail.outbox), 2)
+
+    def test_unused_code_still_blocks_resend(self):
+        """反面：没被消费的有效码仍然受冷却保护（防刷不能被顺手削掉）。"""
+        issue_code(self.email, "register")
+        self.assertGreater(seconds_until_resend(self.email, "register"), 0)
+        with self.assertRaises(CodeError) as ctx:
+            issue_code(self.email, "register")
+        self.assertIn("太频繁", str(ctx.exception))
+        self.assertEqual(len(mail.outbox), 1)
+
     def test_purpose_is_isolated(self):
         register_code = issue_code(self.email, "register")
         with self.assertRaises(CodeError):
@@ -200,9 +223,12 @@ class RegistrationTests(TestCase):
         user = make_user("exists")
         user.email = "taken@example.com"
         user.save(update_fields=["email"])
-        self._send_code("taken@example.com")
+        response = self._send_code("taken@example.com")
         self.assertEqual(len(mail.outbox), 0)
         self.assertFalse(EmailVerificationCode.objects.exists())
+        # 明确告诉用户「已注册」，别让人一直等一封不会来的邮件
+        page = self.client.get(reverse("accounts:register"))
+        self.assertContains(page, "该邮箱已注册")
 
     def test_send_code_button_skips_native_validation(self):
         """回归：点「发送验证码」不能被浏览器原生校验拦下。
@@ -220,13 +246,14 @@ class RegistrationTests(TestCase):
         self.assertIn("formnovalidate", markup)
         self.assertIn(reverse("accounts:send_register_code"), markup)
 
-        reset_button = re.search(
+        # 验证码登录页的发码按钮同理
+        code_login_button = re.search(
             r"<button[^>]*class=\"input-group-action\"[^>]*>",
-            self.client.get(reverse("accounts:password_reset")).content.decode(),
+            self.client.get(reverse("accounts:code_login")).content.decode(),
             re.S,
         )
-        self.assertIsNotNone(reset_button)
-        self.assertIn("formnovalidate", reset_button.group(0))
+        self.assertIsNotNone(code_login_button)
+        self.assertIn("formnovalidate", code_login_button.group(0))
 
     def test_send_code_button_gets_countdown_state(self):
         """发过码之后，页面要把剩余冷却秒数渲染给按钮，刷新也绕不过。"""
@@ -284,6 +311,32 @@ class RegistrationTests(TestCase):
         self._send_code()
         response = self.client.post(reverse("accounts:register"), self._payload(last_code()))
         self.assertContains(response, "该邮箱已注册")
+
+    def test_same_email_can_register_again_after_delete(self):
+        """回归：注销账号后，同一邮箱必须能立刻重新注册。
+
+        注册成功会消费掉注册码（在库里留下一条 used_at 非空的废码），注销账号
+        只删 User 行、不删验证码记录。若这条废码仍参与「60 秒重发冷却」计算，
+        用户注销后点「发送验证码」就会收到「发送太频繁」，再也注册不上——
+        看起来完全像邮箱被永久占用。
+        """
+        self._send_code()
+        self.client.post(reverse("accounts:register"), self._payload(last_code()))
+        user = get_user_model().objects.get(username="newbie@example.com")
+
+        self.client.force_login(user)
+        response = self.client.post(reverse("accounts:delete_account"), {"confirm": "删除"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(get_user_model().objects.filter(username="newbie@example.com").exists())
+
+        # 紧接着就重来：这一步在修复前会失败（0 封邮件）
+        mail.outbox.clear()
+        self._send_code()
+        self.assertEqual(len(mail.outbox), 1, "注销后应该能立刻收到新的注册验证码")
+
+        response = self.client.post(reverse("accounts:register"), self._payload(last_code()))
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(get_user_model().objects.filter(username="newbie@example.com").exists())
 
     def test_email_is_normalized_to_lowercase(self):
         self._send_code("MiXeD@Example.com")
@@ -360,7 +413,7 @@ class LoginTests(TestCase):
 
     def test_login_page_shows_recovery_links(self):
         response = self.client.get(reverse("accounts:login"))
-        self.assertContains(response, reverse("accounts:password_reset"))
+        self.assertContains(response, reverse("accounts:code_login"))
         self.assertContains(response, reverse("accounts:register"))
 
     def test_logout(self):
@@ -371,106 +424,198 @@ class LoginTests(TestCase):
         self.assertIn(reverse("accounts:login"), response["Location"])
 
 
-class PasswordResetTests(TestCase):
+class CodeLoginTests(TestCase):
+    """FR-01 验证码登录：邮箱 + 验证码两个输入框，验证码对了就登录。"""
+
+    EMAIL = "student@example.com"
+
     def setUp(self):
         self.password = "Passw0rd!234"
         self.user = get_user_model().objects.create_user(
-            username="student@example.com", email="student@example.com", password=self.password
+            username=self.EMAIL, email=self.EMAIL, password=self.password
         )
 
-    def _send(self, email="student@example.com"):
-        return self.client.post(reverse("accounts:send_reset_code"), {"email": email})
+    def _send_code(self, email=None):
+        return self.client.post(
+            reverse("accounts:send_login_code"), {"email": email or self.EMAIL}
+        )
 
-    def test_reset_flow_changes_password(self):
-        self._send()
+    def test_page_has_exactly_email_and_code_fields(self):
+        """页面就是两个输入框：邮箱 + 验证码，没有密码框。"""
+        response = self.client.get(reverse("accounts:code_login"))
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertEqual([name for name in form.fields], ["email", "code"])
+        self.assertContains(response, 'name="email"')
+        self.assertContains(response, 'name="code"')
+        self.assertNotContains(response, 'type="password"')
+        # 发送验证码按钮指向发码接口，并且带 formnovalidate（点它时验证码框还是空的）
+        self.assertContains(response, reverse("accounts:send_login_code"))
+
+    def test_send_code_then_login(self):
+        self._send_code()
         self.assertEqual(len(mail.outbox), 1)
-        self.assertIn("重置密码", mail.outbox[0].subject)
-        code = last_code()
+        self.assertIn("登录验证码", mail.outbox[0].subject)
+        self.assertEqual(mail.outbox[0].to, [self.EMAIL])
 
         response = self.client.post(
-            reverse("accounts:password_reset_confirm"),
-            {
-                "email": "student@example.com",
-                "code": code,
-                "password1": "BrandNewPass!2026",
-                "password2": "BrandNewPass!2026",
-            },
+            reverse("accounts:code_login"), {"email": self.EMAIL, "code": last_code()}
         )
         self.assertEqual(response.status_code, 302)
-        self.user.refresh_from_db()
-        self.assertTrue(self.user.check_password("BrandNewPass!2026"))
-        self.assertFalse(self.user.check_password(self.password))
-        # 旧密码失效、新密码可登录
+        self.assertEqual(response["Location"], reverse("core:home"))
+        # 真的登录进去了，能打开需要登录的页面
+        self.assertEqual(self.client.get(reverse("core:home")).status_code, 200)
+
+    def test_login_works_without_typing_password(self):
+        """不需要密码：整个流程里没有任何 password 字段参与。"""
+        self._send_code()
+        self.client.post(
+            reverse("accounts:code_login"), {"email": self.EMAIL, "code": last_code()}
+        )
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.user.pk)
         self.assertEqual(
-            self.client.post(
-                reverse("accounts:login"),
-                {"username": "student@example.com", "password": "BrandNewPass!2026"},
-            ).status_code,
-            302,
+            self.client.session["_auth_user_backend"], "accounts.backends.EmailCodeLoginBackend"
         )
 
-    def test_unknown_email_gets_neutral_message_and_no_code(self):
-        """不存在的邮箱绝不发信（否则可被当作发信机刷），提示语与成功时一致。"""
-        response = self._send("nobody@example.com")
+    def test_wrong_code_rejected(self):
+        self._send_code()
+        response = self.client.post(
+            reverse("accounts:code_login"), {"email": self.EMAIL, "code": "000000"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "验证码不正确")
+        self.assertNotIn("_auth_user_id", self.client.session)
+        record = EmailVerificationCode.objects.get()
+        self.assertEqual(record.attempts, 1)
+        self.assertIsNone(record.used_at, "验证码失败不该被消费掉")
+
+    def test_code_is_single_use(self):
+        self._send_code()
+        code = last_code()
+        self.client.post(reverse("accounts:code_login"), {"email": self.EMAIL, "code": code})
+        self.client.logout()
+
+        response = self.client.post(
+            reverse("accounts:code_login"), {"email": self.EMAIL, "code": code}
+        )
+        self.assertContains(response, "该验证码已使用")
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_code_is_case_insensitive_email(self):
+        self._send_code(email="STUDENT@Example.COM")
+        self.assertEqual(len(mail.outbox), 1)
+        response = self.client.post(
+            reverse("accounts:code_login"), {"email": "Student@example.com", "code": last_code()}
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_unregistered_email_gets_no_code(self):
+        """不存在的邮箱绝不发信（否则就是一台给任意地址发信的机器）。"""
+        response = self._send_code(email="nobody@example.com")
+        self.assertEqual(response.status_code, 302)
         self.assertEqual(len(mail.outbox), 0)
         self.assertFalse(EmailVerificationCode.objects.exists())
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], reverse("accounts:password_reset"))
-        # 自己抓一次页面来读消息（assertRedirects 会预取目标页把消息消费掉）
-        page = self.client.get(reverse("accounts:password_reset"))
-        self.assertContains(page, "如果该邮箱已注册")
+        # 明确告诉用户没这个账号，别让人一直等一封不会来的邮件
+        page = self.client.get(reverse("accounts:code_login"))
+        self.assertContains(page, "该邮箱还没有账号")
 
-    def test_unknown_email_follow_up_reports_missing_account(self):
-        self.client.post(
-            reverse("accounts:send_reset_code"), {"email": "nobody@example.com"}
+    def test_unregistered_email_cannot_login(self):
+        response = self.client.post(
+            reverse("accounts:code_login"), {"email": "nobody@example.com", "code": "123456"}
         )
-        response = self.client.get(reverse("accounts:password_reset_confirm"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "还没有账号")
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_inactive_account_cannot_login(self):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+        self._send_code()
+        response = self.client.post(
+            reverse("accounts:code_login"), {"email": self.EMAIL, "code": last_code()}
+        )
+        self.assertContains(response, "已停用")
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_register_code_cannot_be_used_to_login(self):
+        """注册码和登录码互不通用。"""
+        other = "newbie@example.com"
+        self.client.post(reverse("accounts:send_register_code"), {"email": other})
+        register_code = last_code()
+        response = self.client.post(
+            reverse("accounts:code_login"), {"email": other, "code": register_code}
+        )
+        self.assertNotIn("_auth_user_id", self.client.session)
         self.assertEqual(response.status_code, 200)
 
-    def test_wrong_code_cannot_reset(self):
-        self._send()
-        response = self.client.post(
-            reverse("accounts:password_reset_confirm"),
-            {
-                "email": "student@example.com",
-                "code": "000000",
-                "password1": "BrandNewPass!2026",
-                "password2": "BrandNewPass!2026",
-            },
-        )
-        self.assertContains(response, "验证码不正确")
-        self.user.refresh_from_db()
-        self.assertTrue(self.user.check_password(self.password))
+    def test_resend_needs_cooldown_but_unused_code_blocks(self):
+        self._send_code()
+        self._send_code()  # 冷却中，不会发第二封
+        self.assertEqual(len(mail.outbox), 1)
 
-    def test_reset_code_single_use(self):
-        self._send()
-        code = last_code()
-        payload = {
-            "email": "student@example.com",
-            "code": code,
-            "password1": "BrandNewPass!2026",
-            "password2": "BrandNewPass!2026",
-        }
-        self.client.post(reverse("accounts:password_reset_confirm"), payload)
-        response = self.client.post(
-            reverse("accounts:password_reset_confirm"),
-            {**payload, "password1": "AnotherPass!2026", "password2": "AnotherPass!2026"},
-        )
-        self.assertContains(response, "已使用")
+    def test_relogin_after_code_login_is_not_blocked(self):
+        """回归：登录成功消费掉登录码后，再点发送验证码不该被 60 秒冷却挡住。
 
-    def test_mismatched_passwords_rejected(self):
-        self._send()
-        code = last_code()
+        登录码被消费后留在库里的是一条废码；若它还参与冷却计算，
+        用户退出后想再次用验证码登录就会收到「发送太频繁」。
+        """
+        self._send_code()
+        self.client.post(reverse("accounts:code_login"), {"email": self.EMAIL, "code": last_code()})
+        self.client.logout()
+
+        mail.outbox.clear()
+        self._send_code()
+        self.assertEqual(len(mail.outbox), 1, "登录成功后再发登录码不该被冷却拦住")
         response = self.client.post(
-            reverse("accounts:password_reset_confirm"),
-            {
-                "email": "student@example.com",
-                "code": code,
-                "password1": "BrandNewPass!2026",
-                "password2": "Different!2026",
-            },
+            reverse("accounts:code_login"), {"email": self.EMAIL, "code": last_code()}
         )
-        self.assertContains(response, "两次输入的密码不一致")
+        self.assertEqual(response.status_code, 302)
+
+    def test_login_page_links_to_password_login_and_register(self):
+        response = self.client.get(reverse("accounts:code_login"))
+        self.assertContains(response, reverse("accounts:login"))
+        self.assertContains(response, reverse("accounts:register"))
+
+    def test_logged_in_user_is_redirected_home(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("accounts:code_login"))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("core:home"))
+
+    def test_send_login_code_requires_post(self):
+        self.assertEqual(self.client.get(reverse("accounts:send_login_code")).status_code, 405)
+
+    def test_code_backend_and_password_backend_stay_separate(self):
+        """回归：两条登录路径不能互相串味。
+
+        caller 拿密码走密码后端是完全正常的；但如果请求里带着 `code_login=True`
+        （也就是想走验证码那条路），密码后端必须明确拒收，否则「验证码登录」这个
+        入口在语义上就被稀释了。Django 的 authenticate() 会把额外的 kwarg 原样透传
+        给每个后端，所以这条边界只能在密码后端里显式写出来。
+        """
+        from django.contrib.auth import authenticate
+
+        # 纯密码凭证：密码后端正常放行
+        ok = authenticate(username=self.EMAIL, password=self.password)
+        self.assertEqual(ok.backend, "accounts.backends.EmailOrUsernameBackend")
+        # 带验证码登录标记的凭证：密码后端拒收
+        self.assertIsNone(
+            authenticate(username=self.EMAIL, password=self.password, code_login=True)
+        )
+        self.assertIsNone(
+            authenticate(email=self.EMAIL, password=self.password, code_login=True)
+        )
+
+    def test_code_backend_only_accepts_one_identity_argument(self):
+        """验证码后端只认「email= + code_login=True」，其余一律拒。"""
+        from django.contrib.auth import authenticate
+
+        # email 与 username 同时给（第二个会落到 **kwargs）-> 硬拒，避免被当成密码登录形态
+        self.assertIsNone(authenticate(username=self.EMAIL, email=self.EMAIL, code_login=True))
+        # 正常形态：认
+        self.assertEqual(authenticate(email=self.EMAIL, code_login=True).pk, self.user.pk)
+        # 没带 code_login 标记：不认
+        self.assertIsNone(authenticate(email=self.EMAIL))
 
 
 class PreferenceTests(TestCase):
@@ -500,7 +645,7 @@ class PreferenceTests(TestCase):
         event = process_batch(batch).drafts[0]
         from events.services import confirm_event
 
-        confirm_event(event, as_todo=True, as_calendar=False)
+        confirm_event(event)
         self.assertEqual(event.reminders.count(), 0)
 
     def test_import_discards_raw_when_disabled(self):

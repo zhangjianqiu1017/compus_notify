@@ -10,26 +10,49 @@ from django.test import TestCase, override_settings
 from events.models import Event
 from events.services import confirm_event
 from extraction.fields import (
+    CATEGORY_HOMEWORK,
+    FIELD_COURSE,
     FIELD_DEADLINE,
     FIELD_LOCATION,
+    FIELD_REQUIREMENT,
     FIELD_START_AT,
     RELATION_CORRECTION,
+    RELATION_PRIMARY,
 )
 from extraction.merge import (
     DECISION_MERGE,
     DECISION_NEW,
     DECISION_REVIEW,
     EventSnapshot,
+    anchor_kind_differs,
+    anchors_conflict,
     decide,
     normalize_title,
     score_pair,
 )
 from extraction.normalize import extract_temporal, resolve_datetime
 from extraction.pipeline import process_batch
-from extraction.providers.base import is_noise
+from extraction.providers.base import (
+    ExtractedEvent,
+    ExtractionOutcome,
+    ExtractionProvider,
+    FieldValue,
+    MessageRelation,
+    is_noise,
+)
 from extraction.resolve import IncomingField, merge_multi_value, should_replace
 from ingest.services import create_batch
 from tests_helpers import aware, make_user
+
+# 一条通知里的两个阶段：先提交材料（截止），后课堂汇报（发生）。
+# 用户粘的是一整段（只有开头一处发送者边界）→ 一条原文，两个阶段由抽取环节在同一段里分辨。
+MILESTONE_NOTICE = (
+    "张老师 2026-10-10 09:00\n"
+    "软件设计小组作业提交通知\n"
+    "各组请于【10月15日 18:00】前提交： ① 汇报PPT（命名：第X组+组长姓名） "
+    "② 小组分工说明（含每人贡献占比）\n"
+    "课堂汇报时间：【10月17日】，每组【8分钟】汇报+【2分钟】提问。请提前调试设备，控制好时间。"
+)
 
 
 class NormalizeTests(TestCase):
@@ -139,6 +162,177 @@ class MergeScoreTests(TestCase):
         self.assertEqual(decide(0.6), DECISION_MERGE)
         self.assertEqual(decide(0.3), DECISION_REVIEW)
 
+    def test_anchor_rules_separate_milestones(self):
+        """截止（提交阶段）与开始（现场阶段）是两件事，不能互相归并。"""
+        submit = EventSnapshot(title="软件设计小组作业提交", deadline=aware(2026, 10, 15, 18, 0))
+        report = EventSnapshot(title="软件设计小组课堂汇报", start_at=aware(2026, 10, 17, 0, 0))
+        self.assertTrue(anchor_kind_differs(submit, report))
+        self.assertTrue(anchors_conflict(submit, report))
+
+        # 同一阶段的重复发布（锚点一致）不受这条规则约束，仍走正常打分
+        repeat = EventSnapshot(title="软件设计小组作业提交提醒", deadline=aware(2026, 10, 15, 18, 0))
+        self.assertFalse(anchors_conflict(submit, repeat))
+
+        # 同角色但取值不同的两个阶段（一条消息里的两个截止）也算冲突
+        other = EventSnapshot(title="软件设计小组作业提交", deadline=aware(2026, 10, 20, 23, 59))
+        self.assertTrue(anchors_conflict(submit, other))
+
+        # 缺时间的画像不参与这条规则，避免把「还没识别出时间」误判成另一个阶段
+        self.assertFalse(anchors_conflict(EventSnapshot(title="待定事项"), submit))
+
+
+class MilestoneSplitProvider(ExtractionProvider):
+    """假 Provider：模拟大模型把一条通知拆成「提交 / 汇报」两个阶段。
+
+    规则抽取器按设计不拆分（见 providers/rules.py 的能力边界说明），
+    所以拆分链路用这个假 Provider 固定输入，测试才是确定性的。
+    """
+
+    name = "fake-split"
+    is_llm = False
+    supports_recheck = False
+
+    def __init__(self, *, titles=("软件设计小组作业提交", "软件设计小组课堂汇报")):
+        self.titles = titles
+
+    def extract(self, messages, *, batch=None):
+        message = messages[0]
+        text = message.raw_text
+
+        def field(name, value, *, has_time=True):
+            index = text.find(value)
+            span = (index, index + len(value)) if index >= 0 else None
+            return FieldValue(
+                field=name,
+                value=value,
+                confidence=0.9,
+                span=span,
+                message_index=message.seq,
+                has_time=has_time,
+            )
+
+        submit = ExtractedEvent(
+            title=self.titles[0],
+            category=CATEGORY_HOMEWORK,
+            confidence=0.9,
+            fields=[
+                field(FIELD_DEADLINE, "10月15日 18:00"),
+                field(FIELD_COURSE, "软件设计"),
+                field(
+                    FIELD_REQUIREMENT,
+                    "① 汇报PPT（命名：第X组+组长姓名） ② 小组分工说明（含每人贡献占比）",
+                ),
+            ],
+            messages=[MessageRelation(index=message.seq, relation=RELATION_PRIMARY)],
+        )
+        report = ExtractedEvent(
+            title=self.titles[1],
+            category=CATEGORY_HOMEWORK,
+            confidence=0.9,
+            fields=[
+                field(FIELD_START_AT, "10月17日", has_time=False),
+                field(FIELD_COURSE, "软件设计"),
+                field(FIELD_REQUIREMENT, "每组【8分钟】汇报+【2分钟】提问。请提前调试设备"),
+            ],
+            messages=[MessageRelation(index=message.seq, relation=RELATION_PRIMARY)],
+        )
+        return ExtractionOutcome(events=[submit, report], provider=self.name)
+
+    def describe(self) -> str:  # pragma: no cover - 仅测试用
+        return "假抽取器（固定拆成两个阶段）"
+
+
+class MilestoneSplitTests(TestCase):
+    """一条通知里的多个阶段（先提交、后汇报）必须拆成两个事项。
+
+    提示词负责让大模型拆，这里用假 Provider 固定住拆的结果，
+    验证拆完之后不会被归并层再并回一件、也不会在重新识别时串字段。
+    """
+
+    def setUp(self):
+        self.user = make_user("milestone")
+
+    def _run(self, provider, raw=MILESTONE_NOTICE):
+        batch, _messages, _warnings = create_batch(self.user, raw)
+        return process_batch(batch, provider=provider)
+
+    def test_notice_splits_into_submit_and_report(self):
+        result = self._run(MilestoneSplitProvider())
+        self.assertEqual(len(result.merged), 0)
+        self.assertEqual(len(result.drafts), 2)
+
+        by_title = {event.title: event for event in result.drafts}
+        submit = by_title["软件设计小组作业提交"]
+        report = by_title["软件设计小组课堂汇报"]
+
+        self.assertEqual(submit.deadline, aware(2026, 10, 15, 18, 0))
+        self.assertIsNone(submit.start_at)
+        self.assertIsNone(report.deadline)
+        self.assertEqual(report.start_at, aware(2026, 10, 17, 0, 0))
+
+        # 两个交付物共享同一个截止，写在同一条要求里（FR-14-1：不按交付物拆）
+        requirement = submit.current_field(FIELD_REQUIREMENT).value_text
+        self.assertIn("第X组", requirement)
+        self.assertIn("贡献占比", requirement)
+        # 汇报时长不是提交阶段的时间点
+        self.assertNotIn("8分钟", requirement)
+
+        # 两个事项共享同一条原文，都能回看原文（US-06）
+        self.assertEqual(submit.links.count(), 1)
+        self.assertEqual(report.links.count(), 1)
+        self.assertEqual(submit.links.first().message_id, report.links.first().message_id)
+
+    def test_siblings_do_not_merge_even_with_identical_titles(self):
+        """回归：标题再像也不能把两个阶段并成一件。
+
+        并成一件的症状是同一事项同时带 deadline 与 start_at ——
+        而提醒编排按「截止优先」只排一套，10月17日的课堂汇报会彻底没有提醒。
+        """
+        provider = MilestoneSplitProvider(
+            titles=("软件设计小组作业提交", "软件设计小组作业提交")
+        )
+        result = self._run(provider)
+        self.assertEqual(len(result.merged), 0)
+        self.assertEqual(len(result.drafts), 2)
+        for event in result.drafts:
+            self.assertIsNone(event.review_candidate, "同批次的两个阶段不应互为重复候选")
+            self.assertFalse(event.needs_review, "拆开是正常结果，不需要打扰用户")
+            self.assertFalse(event.deadline and event.start_at, "一个事项不应同时带两个锚点")
+
+        self.assertIn(aware(2026, 10, 15, 18, 0), [event.deadline for event in result.drafts])
+        self.assertIn(aware(2026, 10, 17, 0, 0), [event.start_at for event in result.drafts])
+
+    def test_reimport_keeps_the_split_and_each_reminder(self):
+        """重新识别：两个阶段各自归回自己，不把截止时间灌进汇报事项。"""
+        provider = MilestoneSplitProvider()
+        result = self._run(provider)
+        by_title = {event.title: event for event in result.drafts}
+        submit = by_title["软件设计小组作业提交"]
+        report = by_title["软件设计小组课堂汇报"]
+        confirm_event(submit, reminder_offsets=[1440])
+        confirm_event(report, reminder_offsets=[30])
+        self.assertEqual(submit.reminders.count(), 1)
+        self.assertEqual(report.reminders.count(), 1)
+
+        from ingest.services import create_batch as make_batch
+
+        batch2, _messages, _warnings = make_batch(self.user, MILESTONE_NOTICE, reuse_existing=True)
+        result2 = process_batch(batch2, provider=provider)
+
+        self.assertEqual(len(result2.drafts), 0, "同一原文不该再生成重复草稿")
+        self.assertEqual(len(result2.merged), 2)
+        self.assertEqual(Event.objects.filter(owner=self.user).count(), 2)
+
+        submit.refresh_from_db()
+        report.refresh_from_db()
+        self.assertEqual(submit.deadline, aware(2026, 10, 15, 18, 0))
+        self.assertIsNone(submit.start_at)
+        self.assertIsNone(report.deadline)
+        self.assertEqual(report.start_at, aware(2026, 10, 17, 0, 0))
+        # 两个阶段各自的提醒都还在（截止优先的锚点规则下，并成一件必然丢一个）
+        self.assertEqual(submit.reminders.count(), 1)
+        self.assertEqual(report.reminders.count(), 1)
+
 
 class ConflictResolutionTests(TestCase):
     def _existing(self, value="10月15日", confidence=0.8, sent=None):
@@ -246,7 +440,7 @@ class PipelineTests(TestCase):
             "【程序设计竞赛报名】\n请于10月20日前完成报名，报名链接：https://example.edu/contest"
         )
         event = result1.drafts[0]
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
         event.refresh_from_db()
         self.assertEqual(event.deadline, aware(2026, 10, 20, 23, 59))
         self.assertEqual(event.reminders.count(), 1)
@@ -273,7 +467,7 @@ class PipelineTests(TestCase):
         raw1 = "【程序设计竞赛报名】\n请于10月20日前完成报名，报名链接：https://example.edu/contest"
         _batch1, result1 = self._run(raw1)
         event = result1.drafts[0]
-        confirm_event(event, as_todo=False, as_calendar=True, reminder_offsets=[])
+        confirm_event(event, reminder_offsets=[])
 
         raw2 = "【程序设计竞赛报名】\n请于10月20日前完成报名，报名链接：https://example.edu/contest\n主办：校团委"
         _batch2, result2 = self._run(raw2)
@@ -284,7 +478,7 @@ class PipelineTests(TestCase):
     def test_gray_zone_asks_user_instead_of_silently_merging(self):
         _batch1, result1 = self._run("【高等数学作业】请于10月20日前提交")
         first = result1.drafts[0]
-        confirm_event(first, as_todo=True, as_calendar=False, reminder_offsets=[])
+        confirm_event(first, reminder_offsets=[])
 
         _batch2, result2 = self._run("高等数学作业提交提醒")
         self.assertEqual(len(result2.merged), 0)
@@ -310,7 +504,7 @@ class PipelineTests(TestCase):
     def test_cancel_notice_marks_event_cancelled(self):
         _batch1, result1 = self._run("【程序设计竞赛报名】\n请于10月20日前完成报名")
         event = result1.drafts[0]
-        confirm_event(event, as_todo=False, as_calendar=True, reminder_offsets=[])
+        confirm_event(event, reminder_offsets=[])
         self._run("更正：程序设计竞赛报名取消")
         event.refresh_from_db()
         self.assertTrue(event.is_cancelled)
@@ -343,7 +537,7 @@ class PipelineTests(TestCase):
         raw = "【程序设计竞赛报名】\n请于10月20日前完成报名"
         _batch1, result1 = self._run(raw)
         event = result1.drafts[0]
-        confirm_event(event, as_todo=True, as_calendar=False, reminder_offsets=[1440])
+        confirm_event(event, reminder_offsets=[1440])
 
         from ingest.services import create_batch as make_batch
 
@@ -396,6 +590,19 @@ class PipelineTests(TestCase):
         self.assertEqual(field.value_dt.date(), date(2026, 10, 16))
 
 
+class FakeMessage:
+    """联调用例的输入对象：Provider 只读这几个属性，不必真的落库。"""
+
+    def __init__(self, seq, text, sender="", source_label="测试群", anchor_time=None):
+        from django.utils import timezone
+
+        self.seq = seq
+        self.raw_text = text
+        self.sender = sender
+        self.source_label = source_label
+        self.anchor_time = anchor_time or timezone.now()
+
+
 @unittest.skipUnless(os.environ.get("LLM_LIVE_TEST") == "1", "需要真实调用大模型：LLM_LIVE_TEST=1 才跑")
 class LiveLlmTests(TestCase):
     """真实调用识别服务的联调用例（默认跳过，避免单测联网/花钱/不确定）。
@@ -403,22 +610,16 @@ class LiveLlmTests(TestCase):
     运行：LLM_LIVE_TEST=1 python manage.py test extraction.tests.LiveLlmTests
     """
 
+    def _fake_message(self, seq, text, sender="", source_label="测试群"):
+        return FakeMessage(seq, text, sender=sender, source_label=source_label)
+
     def test_real_provider_merges_and_ignores_chitchat(self):
-        from django.utils import timezone
-
         from extraction.providers import OpenAICompatProvider
-        from extraction.providers.base import FieldValue, MessageRelation
-
-        class FakeMessage:
-            def __init__(self, seq, text, sender=""):
-                self.seq, self.raw_text, self.sender = seq, text, sender
-                self.source_label = "测试群"
-                self.anchor_time = timezone.now()
 
         messages = [
-            FakeMessage(1, "【程序设计竞赛报名】\n请于10月20日前完成报名，地点：实验楼B302", "学习委员"),
-            FakeMessage(2, "更正：报名地点改到实验楼B303", "学习委员"),
-            FakeMessage(3, "收到", "同学A"),
+            self._fake_message(1, "【程序设计竞赛报名】\n请于10月20日前完成报名，地点：实验楼B302", "学习委员"),
+            self._fake_message(2, "更正：报名地点改到实验楼B303", "学习委员"),
+            self._fake_message(3, "收到", "同学A"),
         ]
         outcome = OpenAICompatProvider().extract(messages)
         self.assertEqual(outcome.provider, "llm")
@@ -431,3 +632,43 @@ class LiveLlmTests(TestCase):
         self.assertIsNotNone(location, "应抽取出地点")
         self.assertIn("B303", location.value)
         self.assertEqual(len(outcome.ignored), 1, "「收到」应被判为闲聊")
+
+    def test_real_provider_splits_milestones_of_one_notice(self):
+        """多阶段通知必须拆成两个 events：提交阶段（deadline）与现场阶段（start_at）。
+
+        这是提示词里最容易退化的一条：合成一件时，提醒按「截止优先」只排一套，
+        课堂汇报会彻底没有提醒，而界面上却看不出少了什么。
+        """
+        from extraction.providers import OpenAICompatProvider
+
+        text = (
+            "软件设计小组作业提交通知\n"
+            "各组请于【10月15日 18:00】前提交： ① 汇报PPT（命名：第X组+组长姓名） "
+            "② 小组分工说明（含每人贡献占比）\n"
+            "课堂汇报时间：【10月17日】，每组【8分钟】汇报+【2分钟】提问。请提前调试设备，控制好时间。"
+        )
+        outcome = OpenAICompatProvider().extract(
+            [self._fake_message(1, text, "张老师", "软件设计课程群")]
+        )
+        self.assertEqual(
+            len(outcome.events), 2, "提交阶段与课堂汇报阶段应拆成两个事项"
+        )
+
+        kinds = [
+            {item.field for item in event.fields if item.field in ("deadline", "start_at", "end_at")}
+            for event in outcome.events
+        ]
+        self.assertIn({"deadline"}, kinds, "应有一个只带截止时间的事件（提交）")
+        self.assertIn({"start_at"}, kinds, "应有一个只带开始时间的事件（课堂汇报）")
+        self.assertEqual(
+            len({event.category for event in outcome.events}),
+            1,
+            "同一份作业的多个阶段应属于同一分类",
+        )
+
+        for event in outcome.events:
+            self.assertNotIn("10月", event.title, "【】里的时间是强调符，不能当标题")
+            self.assertIn("软件设计", event.title, "标题应能看出是哪门课的哪件事")
+            course = event.get("course")
+            if course is not None:
+                self.assertEqual(course.value, "软件设计", "课程名不带「小组」「作业」等字样")

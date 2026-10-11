@@ -2,6 +2,8 @@
 
 设计原则（对应讨论确定的信息处理流程 [0] 采集与规范化）：
 * 保留消息边界与发送时间——这是后续归并与相对时间锚定的前提；
+* 只有真实边界才切分（发送者/时间戳行、「李四：」前缀）；**空行不是边界**——
+  用户复制的一段文字本身就是一条原文，不能拆碎成「原始通知 + 补充信息」；
 * 切分拿不准时不硬切，退化为「整段一条消息」，交给抽取模型在同一语义任务里拆分；
 * 原文去重使用 (batch, message_hash) 唯一约束，保证重复导入幂等。
 """
@@ -158,8 +160,9 @@ def _match_header(line: str, text: str) -> tuple[str, str, datetime | None, str]
 def split_messages(raw: str, *, source_label: str = "") -> tuple[list[ParsedMessage], bool]:
     """把粘贴内容切成消息列表。
 
-    返回 (messages, confident)。confident=False 表示未找到任何可靠边界，
-    此时整段作为一条消息返回，由抽取环节统一处理。
+    只按真实边界切分：带发送者/时间戳的群聊记录行，以及「李四：」这类可靠的行内前缀。
+    没有边界时整段作为一条原文返回（confident=False）——用户粘贴的一段文字就是一条
+    原始信息，不再按空行继续拆碎；其中包含的多个事件由抽取环节在同一语义任务里分辨。
     """
     text = normalize_text(raw)
     if not text:
@@ -196,13 +199,8 @@ def split_messages(raw: str, *, source_label: str = "") -> tuple[list[ParsedMess
     if found_header and messages:
         return messages, True
 
-    # 没有边界行：尝试按空行分段
-    blocks = [block.strip() for block in re.split(r"\n\s*\n", text) if block.strip()]
-    if len(blocks) > 1:
-        return (
-            [ParsedMessage(raw_text=block, source_label=source_label) for block in blocks],
-            True,
-        )
+    # 没有边界行：整段就是一条原文。空行只是排版，不是消息边界——
+    # 按空行切分会让同一段通知变成「原始通知 + 补充信息」两条原文挂在同一事项上。
     return [ParsedMessage(raw_text=text, source_label=source_label)], False
 
 
@@ -257,11 +255,11 @@ def create_batch(
       不产生第二份原文副本（既不浪费空间，也避免同一通知生成两条待办）。
     """
     warnings: list[str] = []
-    parsed, confident = split_messages(raw_text, source_label=source_label)
+    # 没有边界行（用户直接贴通知正文）是最常见的粘贴方式，整段作为一条原文属于正常结果，
+    # 不是需要提示的异常：段内多个事项由识别环节拆开，用户无需为此做任何事。
+    parsed, _confident = split_messages(raw_text, source_label=source_label)
     if not parsed:
         raise ValueError("导入内容为空")
-    if not confident:
-        warnings.append("未能识别消息边界，已按整段内容处理（多事件会在识别阶段拆分）。")
 
     limit = int(getattr(settings, "MAX_MESSAGES_PER_BATCH", 40))
     if len(parsed) > limit:
