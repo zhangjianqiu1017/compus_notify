@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}{{ app_name }}{% endblock %}
 {# 待确认条数属于「等你去处理」的状态：常驻、可关，但不占页面顶部 #}
 {% block sticky_toasts %}
   {% if draft_count %}
     <div class="toast toast-warning" data-toast data-toast-sticky>
-      <span class="toast-text">{{ draft_count }} 条识别结果待确认。<a href="{% url 'events:review_list' %}">去确认 →</a></span>
+      <span class="toast-text">{{ draft_count }} 条识别结果待确认。<a href="{% url 'events:todo' %}?show=draft">去确认 →</a></span>
       <button type="button" class="toast-close" data-toast-close aria-label="关闭提示">&#10005;</button>
     </div>
   {% endif %}
@@ -13,42 +14,29 @@
 <div class="page-head">
   <div>
     <h1>今天要处理的事</h1>
-    <p class="sub">{{ now|date:"n 月 j 日 l" }} · 提醒按事项设置，在事项详情页里管</p>
+    {# 日期是这一页的坐标系：给「今天」一个明确的徽标 + 加粗日期，别让它只是一行浅灰小字 #}
+    <p class="sub day-line">
+      <span class="day-badge">今天</span>
+      <span class="day-date">{{ now|date:"n 月 j 日" }}</span>
+      <span class="day-weekday">{{ now|date:"l" }}</span>
+    </p>
   </div>
   <div class="actions">
-    <a class="btn" href="{% url 'ingest:import' %}">导入通知</a>
-    <a class="btn ghost" href="{% url 'events:create' %}">手动新建</a>
+    <a class="btn" href="{% url 'ingest:import' %}">{% icon "import" %}导入通知</a>
+    <a class="btn ghost" href="{% url 'events:create' %}">{% icon "plus" %}手动新建</a>
   </div>
 </div>
 
-{% if overdue %}
-<div class="card" style="border-color:#f5d2cf;background:#fffafa;">
-  <h3>已过截止时间</h3>
-  <ul class="list-plain">
-    {% for event in overdue %}
-      <li>
-        <div class="list-item-head">
-          <a class="title-link" href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
-          <span class="overdue small">{{ event.deadline|date:"m-d H:i" }}</span>
-          <form method="post" action="{% url 'events:complete' event.pk %}" style="margin-left:auto;">
-            {% csrf_token %}<input type="hidden" name="next" value="/">
-            <button class="btn ghost small" type="submit">完成</button>
-          </form>
-        </div>
-      </li>
-    {% endfor %}
-  </ul>
-</div>
-{% endif %}
-
+{# 已过截止时间的事不再在首页单独成卡：它归「待办」列表，首页只说接下来要做什么 #}
 <div class="card">
   <div class="card-header">
     <h3>最近 {{ days }} 天</h3>
     <div class="btn-row">
-      <a class="btn ghost small" href="{% url 'events:todo' %}">全部待办</a>
-      <a class="btn ghost small" href="{% url 'events:calendar' %}">日历</a>
+      <a class="btn ghost small" href="{% url 'events:todo' %}">{% icon "checklist" 14 %}全部待办</a>
+      <a class="btn ghost small" href="{% url 'events:calendar' %}">{% icon "calendar" 14 %}日历</a>
     </div>
   </div>
+  {% if timeline %}
   <ul class="list-plain">
     {% for row in timeline %}
       <li>
@@ -58,7 +46,7 @@
           <span class="meta nowrap">{{ row.anchor|date:"m-d H:i" }}</span>
           <form method="post" action="{% url 'events:complete' row.event.pk %}" style="margin-left:auto;">
             {% csrf_token %}<input type="hidden" name="next" value="/">
-            <button class="btn ghost small" type="submit">完成</button>
+            <button class="btn ghost small" type="submit">{% icon "check" 14 %}完成</button>
           </form>
         </div>
         {% if row.event.course or row.event.location %}
@@ -67,18 +55,30 @@
           </div>
         {% endif %}
       </li>
-    {% empty %}
-      <li class="muted small">最近 {{ days }} 天没有要处理的事</li>
     {% endfor %}
   </ul>
+  {% else %}
+  {# 空态也给个画面：一行灰字容易被当成「还没加载完」，插图 + 下一步入口更像「确实没事」 #}
+  <div class="empty">
+    <svg class="empty-art" viewBox="0 0 96 96" width="96" height="96" aria-hidden="true" focusable="false">
+      <circle class="art-bg" cx="48" cy="48" r="40"></circle>
+      <rect class="art-box" x="27" y="30" width="42" height="37" rx="7"></rect>
+      <path class="art-line" d="M27 42h42M36 24v11M60 24v11"></path>
+      <path class="art-check" d="m39.5 55 6.5 6.5L61 47"></path>
+    </svg>
+    <p class="empty-title">最近 {{ days }} 天没有要处理的事</p>
+    <p class="empty-hint">时间轴空着，这 {{ days }} 天可以自己安排。有新通知随时粘进来。</p>
+    <a class="btn ghost small" href="{% url 'ingest:import' %}">{% icon "import" 14 %}导入一条通知</a>
+  </div>
+  {% endif %}
 </div>
 
 <div class="card">
   <div class="stat-row">
-    <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">事项</div></div>
-    <div class="stat"><div class="num">{{ stats.drafts }}</div><div class="label">待确认</div></div>
-    <div class="stat"><div class="num">{{ stats.open_todos }}</div><div class="label">未完成</div></div>
-    <div class="stat"><div class="num">{{ stats.reminders }}</div><div class="label">提醒</div></div>
+    <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">{% icon "list" 13 %}事项</div></div>
+    <div class="stat"><div class="num">{{ stats.drafts }}</div><div class="label">{% icon "alert" 13 %}待确认</div></div>
+    <div class="stat"><div class="num">{{ stats.open_todos }}</div><div class="label">{% icon "clock" 13 %}未完成</div></div>
+    <div class="stat"><div class="num">{{ stats.reminders }}</div><div class="label">{% icon "bell" 13 %}提醒</div></div>
   </div>
 </div>
 {% endblock %}

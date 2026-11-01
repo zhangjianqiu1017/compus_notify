@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% load icons %}
+{% block title %}{{ day|date:"n 月 j 日" }} · {{ app_name }}{% endblock %}
+{% block content %}
+{# 手机上点日程格子落到这一页：窄屏格子放不下正文，所以把「当天有什么」搬到这儿来说清楚 #}
+<div class="page-head">
+  <div>
+    <h1>{{ day|date:"n 月 j 日" }}</h1>
+    <p class="sub day-line">
+      {% if is_today %}<span class="day-badge">今天</span>{% endif %}
+      <span class="day-weekday">{{ day|date:"Y 年" }} · 星期{{ weekday_name }}</span>
+      <span class="day-weekday">
+        {% if events %}共 {{ events|length }} 项{% if open_count %}，{{ open_count }} 项待完成{% endif %}{% else %}没有安排{% endif %}
+      </span>
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="{{ prev_url }}">{% icon "chevron-left" %}前一天</a>
+    <a class="btn ghost" href="{% url 'events:calendar' %}?year={{ calendar_year }}&month={{ calendar_month }}">
+      {% icon "calendar" %}回到月历
+    </a>
+    <a class="btn ghost" href="{{ next_url }}">后一天{% icon "chevron-right" %}</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3>当天安排</h3>
+    <div class="btn-row">
+      <a class="btn ghost small" href="{% url 'events:create' %}">{% icon "plus" 14 %}手动新建</a>
+    </div>
+  </div>
+  {% if events %}
+    <ul class="list-plain day-list">
+      {% for event in events %}
+        <li class="{% if event.is_closed %}is-closed{% endif %}">
+          <div class="list-item-head">
+            {# 一天之内的先后顺序全靠这一列时间：主时间与月历同源（有开始时间看开始） #}
+            <span class="day-time">{% if event.start_at %}{{ event.start_at|date:"H:i" }}{% else %}{{ event.deadline|date:"H:i" }}{% endif %}</span>
+            <a class="title-link {% if event.todo_status == 'done' %}done{% endif %}"
+               href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+            {# 顺序有讲究：已经结束的活动说「已结束」，别退化成「已过期」 #}
+            {% if event.todo_status == "done" %}<span class="tag ok">已完成</span>
+            {% elif event.is_cancelled %}<span class="tag danger">已取消</span>
+            {% elif event.is_ended %}<span class="tag muted">已结束</span>
+            {% elif event.overdue %}<span class="tag danger">已过期</span>
+            {% else %}<span class="tag">待完成</span>{% endif %}
+          </div>
+          <div class="small muted day-meta">
+            <span class="tag muted">{{ event.get_category_display }}</span>
+            {% if event.start_at and event.deadline %}
+              <span class="nowrap {% if event.overdue_kind == 'deadline' and not event.is_closed %}overdue{% endif %}">截止 {{ event.deadline|date:"n/j H:i" }}</span>
+            {% endif %}
+            {% if event.location %}<span class="nowrap">{% icon "location" 12 %} {{ event.location }}</span>{% endif %}
+          </div>
+          <div class="btn-row day-actions">
+            {% if event.saved_as_todo %}
+              {% if event.todo_status == "done" %}
+                <form method="post" action="{% url 'events:reopen' event.pk %}">
+                  {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                  <button class="btn ghost small" type="submit">{% icon "undo" 14 %}撤销完成</button>
+                </form>
+              {% else %}
+                <form method="post" action="{% url 'events:complete' event.pk %}">
+                  {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                  <button class="btn small" type="submit">{% icon "check" 14 %}完成</button>
+                </form>
+              {% endif %}
+            {% endif %}
+            <a class="btn ghost small" href="{% url 'events:edit' event.pk %}">{% icon "edit" 14 %}编辑</a>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty">
+      <p>这一天没有安排</p>
+      <div class="btn-row">
+        <a class="btn ghost" href="{% url 'events:calendar' %}?year={{ calendar_year }}&month={{ calendar_month }}">
+          {% icon "calendar" %}回到月历
+        </a>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

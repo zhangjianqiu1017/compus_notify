@@ -64,12 +64,53 @@ class EventFlowTests(TestCase):
         self.assertEqual(event.todo_status, Event.TodoStatus.PENDING)
         self.assertIsNone(event.done_at)
 
-    def test_draft_is_not_in_todo_list_before_confirmation(self):
+    def test_draft_waits_in_review_tab_before_confirmation(self):
+        """没确认的草稿不进待办表，只排在「待确认」子栏目里等着核对。"""
         self._draft()
         response = self.client.get(reverse("events:todo"))
         self.assertNotContains(response, "程序设计竞赛报名")
-        response = self.client.get(reverse("events:review_list"))
+        # 角标常驻：不点进子栏目也知道有东西等着确认
+        self.assertContains(response, "待确认 1")
+        response = self.client.get(reverse("events:todo"), {"show": "draft"})
         self.assertContains(response, "程序设计竞赛报名")
+        self.assertContains(response, "核对并确认")
+
+    def _review_payload(self, event):
+        """确认门提交用的最小表单（截止时间给未来，避免提醒被「已经过期」改写）。"""
+        prefix = f"e{event.pk}"
+        return {
+            f"{prefix}-title": event.title,
+            f"{prefix}-category": event.category,
+            f"{prefix}-course": "",
+            f"{prefix}-location": "",
+            f"{prefix}-organizer": "",
+            f"{prefix}-link": "",
+            f"{prefix}-contact": "",
+            f"{prefix}-requirement": "",
+            f"{prefix}-deadline": "2026-12-20T23:59",
+            f"{prefix}-start_at": "",
+            f"{prefix}-end_at": "",
+            f"{prefix}-reminder_offsets": [],
+        }
+
+    def test_confirm_returns_to_review_queue_when_drafts_remain(self):
+        """一次导入有多条时，确认完一条回到「待确认」继续处理下一条。"""
+        first = self._draft()
+        self._draft("【高等数学作业】\n请于10月15日前提交")
+        response = self.client.post(
+            reverse("events:review", args=[first.pk]), self._review_payload(first)
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("events:todo"), response["Location"])
+        self.assertIn("show=draft", response["Location"])
+        self.assertContains(self.client.get(response["Location"]), "高等数学作业")
+
+    def test_confirm_of_last_draft_opens_its_detail(self):
+        first = self._draft()
+        response = self.client.post(
+            reverse("events:review", args=[first.pk]), self._review_payload(first)
+        )
+        self.assertRedirects(response, reverse("events:detail", args=[first.pk]))
 
     def test_review_page_marks_evidence_in_original(self):
         """证据不再单列一栏，而是就地标在原文里：高亮片段 + 字段名标签。"""
@@ -107,6 +148,10 @@ class EventFlowTests(TestCase):
     def test_review_post_confirms_with_edited_values(self):
         event = self._draft()
         prefix = f"e{event.pk}"
+        # 截止时间取「现在 + 5 天 18:00」：写死日历会让测试随时间腐烂（提前 1 天就落到过去）
+        deadline = (timezone.localtime() + timedelta(days=5)).replace(
+            hour=18, minute=0, second=0, microsecond=0
+        )
         data = {
             f"{prefix}-title": "程序设计竞赛报名（已核对）",
             f"{prefix}-category": "contest",
@@ -116,7 +161,7 @@ class EventFlowTests(TestCase):
             f"{prefix}-link": "https://example.edu/contest",
             f"{prefix}-contact": "",
             f"{prefix}-requirement": "",
-            f"{prefix}-deadline": "2026-10-22T18:00",
+            f"{prefix}-deadline": deadline.strftime("%Y-%m-%dT%H:%M"),
             f"{prefix}-start_at": "",
             f"{prefix}-end_at": "",
             f"{prefix}-reminder_offsets": ["1440"],
@@ -130,8 +175,10 @@ class EventFlowTests(TestCase):
         self.assertTrue(event.saved_as_calendar)
         self.assertEqual(event.title, "程序设计竞赛报名（已核对）")
         # 用户把截止时间从 23:59 改成 18:00，提醒要跟着改
-        self.assertEqual(event.deadline, aware(2026, 10, 22, 18, 0))
-        self.assertEqual(event.reminders.first().remind_at, aware(2026, 10, 21, 18, 0))
+        self.assertEqual(event.deadline, deadline)
+        self.assertEqual(
+            event.reminders.first().remind_at, deadline - timedelta(minutes=1440)
+        )
         # 修改留痕（反馈闭环）
         from extraction.models import FieldEditLog
 
@@ -162,32 +209,40 @@ class EventFlowTests(TestCase):
         # 提醒随事项一起删除
         self.assertFalse(Reminder.objects.filter(event_id=event.pk).exists())
 
-    def test_delete_button_present_in_list_and_todo(self):
+    def test_delete_button_present_in_todo(self):
         event = self._draft()
         confirm_event(event, reminder_offsets=[])
         delete_url = reverse("events:delete", args=[event.pk])
-        for page in ("events:list", "events:todo"):
-            response = self.client.get(reverse(page))
-            self.assertContains(response, delete_url, msg_prefix=page)
+        for params in ({}, {"show": "all"}):
+            response = self.client.get(reverse("events:todo"), params)
+            self.assertContains(response, delete_url, msg_prefix=str(params))
             self.assertContains(response, "删除")
 
-    def test_event_list_status_column_shows_todo_status_only(self):
-        """「事项」页状态列只说这条事要做什么，不再显示「已确认」这种内部状态。"""
-        event = self._draft()
-        confirm_event(event, reminder_offsets=[])
-        response = self.client.get(reverse("events:list"))
-        self.assertContains(response, "待完成")
+    def test_todo_status_column_does_not_leak_internal_status(self):
+        """状态列只说这条事要做什么，不显示「已确认」这种内部状态。"""
+        Event.objects.create(
+            owner=self.user,
+            title="还没到期的事项",
+            status=Event.Status.CONFIRMED,
+            saved_as_todo=True,
+            todo_status=Event.TodoStatus.PENDING,
+            deadline=timezone.now() + timedelta(days=3),
+        )
+        response = self.client.get(reverse("events:todo"), {"show": "all"})
+        self.assertContains(response, "进行中")
         self.assertNotContains(response, "已确认")
 
     def test_bulk_delete_removes_selected(self):
         keep = self._draft("【程序设计竞赛报名】\n请于10月20日前完成报名")
         first = self._draft("【高等数学作业】\n请于10月15日前提交")
         second = self._draft("【校园歌手大赛】\n报名截止10月30日")
+        for event in (keep, first, second):
+            confirm_event(event, reminder_offsets=[])
         response = self.client.post(
             reverse("events:bulk_delete"),
-            {"ids": [str(first.pk), str(second.pk)], "next": reverse("events:list")},
+            {"ids": [str(first.pk), str(second.pk)], "next": reverse("events:todo")},
         )
-        self.assertRedirects(response, reverse("events:list"))
+        self.assertRedirects(response, reverse("events:todo"))
         remaining = set(Event.objects.values_list("pk", flat=True))
         self.assertIn(keep.pk, remaining)
         self.assertNotIn(first.pk, remaining)
@@ -198,6 +253,21 @@ class EventFlowTests(TestCase):
         response = self.client.post(reverse("events:bulk_delete"), {}, follow=True)
         self.assertContains(response, "请先勾选")
         self.assertTrue(Event.objects.filter(pk=event.pk).exists())
+
+    def test_todo_table_has_no_nested_forms(self):
+        """批量删除的外层表单里不能再套表单：行内按钮一律用 formaction 指端点。
+
+        嵌套表单是无效 HTML，浏览器会把内层 form 丢掉，「完成 / 删除」就静默失灵。
+        """
+        event = self._draft()
+        confirm_event(event, reminder_offsets=[])
+        body = self.client.get(reverse("events:todo")).content.decode("utf-8")
+        depth = 0
+        deepest = 0
+        for tag in re.findall(r"</?form\b", body):
+            depth += -1 if tag == "</form" else 1
+            deepest = max(deepest, depth)
+        self.assertEqual(deepest, 1, "待办表格里出现了嵌套表单")
 
     def test_bulk_delete_cannot_touch_other_users_data(self):
         """勾选别人的 id 也不该删掉——查询必须按所有者收口。"""
@@ -215,25 +285,6 @@ class EventFlowTests(TestCase):
         self.assertFalse(Event.objects.filter(pk=mine.pk).exists())
         self.assertTrue(Event.objects.filter(pk=victim_event.pk).exists())
 
-    def test_delete_completed_todos_only(self):
-        pending = self._draft("【程序设计竞赛报名】\n请于10月20日前完成报名")
-        done = self._draft("【高等数学作业】\n请于10月15日前提交")
-        confirm_event(pending, reminder_offsets=[])
-        confirm_event(done, reminder_offsets=[])
-        complete_todo(done)
-
-        response = self.client.post(reverse("events:delete_completed"), follow=True)
-        self.assertContains(response, "已删除 1 条已完成的待办")
-        self.assertTrue(Event.objects.filter(pk=pending.pk).exists())
-        self.assertFalse(Event.objects.filter(pk=done.pk).exists())
-
-    def test_delete_completed_reports_when_nothing_to_delete(self):
-        event = self._draft()
-        confirm_event(event, reminder_offsets=[])
-        response = self.client.post(reverse("events:delete_completed"), follow=True)
-        self.assertContains(response, "没有已完成的待办")
-        self.assertTrue(Event.objects.filter(pk=event.pk).exists())
-
     def test_calendar_view_contains_event(self):
         event = self._draft()
         confirm_event(event, reminder_offsets=[])
@@ -245,6 +296,10 @@ class EventFlowTests(TestCase):
         event = self._draft()
         confirm_event(event, reminder_offsets=[1440])
         prefix = f"e{event.pk}"
+        # 同样不写死日历：改成「现在 + 6 天 23:59」，提前 1 天的提醒点才仍在未来
+        deadline = (timezone.localtime() + timedelta(days=6)).replace(
+            hour=23, minute=59, second=0, microsecond=0
+        )
         data = {
             f"{prefix}-title": event.title,
             f"{prefix}-category": event.category,
@@ -254,7 +309,7 @@ class EventFlowTests(TestCase):
             f"{prefix}-link": "",
             f"{prefix}-contact": "",
             f"{prefix}-requirement": "",
-            f"{prefix}-deadline": "2026-11-01T23:59",
+            f"{prefix}-deadline": deadline.strftime("%Y-%m-%dT%H:%M"),
             f"{prefix}-start_at": "",
             f"{prefix}-end_at": "",
             f"{prefix}-reminder_offsets": ["1440"],
@@ -262,8 +317,10 @@ class EventFlowTests(TestCase):
         response = self.client.post(reverse("events:edit", args=[event.pk]), data)
         self.assertEqual(response.status_code, 302)
         event.refresh_from_db()
-        self.assertEqual(event.deadline, aware(2026, 11, 1, 23, 59))
-        self.assertEqual(event.reminders.first().remind_at, aware(2026, 10, 31, 23, 59))
+        self.assertEqual(event.deadline, deadline)
+        self.assertEqual(
+            event.reminders.first().remind_at, deadline - timedelta(minutes=1440)
+        )
 
     def test_manual_field_edit_keeps_history(self):
         event = self._draft()
@@ -350,13 +407,15 @@ class ClosedStateTests(TestCase):
         self.assertContains(response, "已经过去的讲座")
         self.assertContains(response, "cal-event  is-closed")
 
-    def test_ended_event_shows_tag_in_event_list(self):
+    def test_ended_event_shows_tag_in_todo_list(self):
         event = self._event(
             title="已经结束的事项",
+            saved_as_todo=True,
+            todo_status=Event.TodoStatus.PENDING,
             start_at=timezone.now() - timedelta(days=2),
             end_at=timezone.now() - timedelta(days=2) + timedelta(hours=1),
         )
-        response = self.client.get(reverse("events:list"))
+        response = self.client.get(reverse("events:todo"), {"show": "all"})
         self.assertContains(response, '<tr class="is-closed">')
         self.assertContains(response, "已结束")
 
@@ -370,6 +429,103 @@ class ClosedStateTests(TestCase):
         self.assertTrue(event.is_closed)
         response = self.client.get(reverse("events:todo"), {"show": "all"})
         self.assertContains(response, '<tr class="is-closed">')
+
+
+class DayViewTests(TestCase):
+    """手机上点日历格子落到的「当天安排」页。
+
+    窄屏格子只有 40px 宽，排不下正文，所以格子退化成「彩点 + 整格可点」，
+    内容交给这一页说清楚；空格子点了只出一条轻提示，不做跳转。
+    """
+
+    def setUp(self):
+        self.user = make_user("dayview")
+        self.client.force_login(self.user)
+
+    def _event(self, title: str, **kwargs):
+        defaults = {
+            "owner": self.user,
+            "title": title,
+            "status": Event.Status.CONFIRMED,
+            "saved_as_todo": True,
+            "todo_status": Event.TodoStatus.PENDING,
+        }
+        defaults.update(kwargs)
+        return Event.objects.create(**defaults)
+
+    def test_calendar_cell_links_to_that_day(self):
+        self._event("周三的讲座", start_at=aware(2026, 10, 7, 19))
+        response = self.client.get(reverse("events:calendar"), {"year": 2026, "month": 10})
+        self.assertContains(response, reverse("events:day", args=[2026, 10, 7]))
+        self.assertContains(response, "has-events")
+
+    def test_calendar_cell_without_events_is_not_a_link(self):
+        """没有安排的日期不给链接——点了只出轻提示（app.js），不会跳到空页面。"""
+        self._event("周三的讲座", start_at=aware(2026, 10, 7, 19))
+        response = self.client.get(reverse("events:calendar"), {"year": 2026, "month": 10})
+        self.assertNotContains(response, reverse("events:day", args=[2026, 10, 8]))
+
+    def test_day_page_lists_only_that_day(self):
+        self._event("早上的作业", deadline=aware(2026, 10, 7, 9))
+        self._event("周三的讲座", start_at=aware(2026, 10, 7, 19))
+        self._event("周四的讲座", start_at=aware(2026, 10, 8, 19))
+        response = self.client.get(reverse("events:day", args=[2026, 10, 7]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "早上的作业")
+        self.assertContains(response, "周三的讲座")
+        self.assertNotContains(response, "周四的讲座")
+        # 按当天的钟点排：9:00 的截止排在 19:00 的讲座前面
+        body = response.content.decode()
+        self.assertLess(body.index("早上的作业"), body.index("周三的讲座"))
+
+    def test_day_page_only_uses_the_primary_day(self):
+        """有开始时间的事项只算开始那一天，与月历把事项画进哪一格保持一致。"""
+        self._event(
+            "报名到月底",
+            start_at=aware(2026, 10, 1, 9),
+            deadline=aware(2026, 10, 20, 23, 59),
+        )
+        self.assertContains(self.client.get(reverse("events:day", args=[2026, 10, 1])), "报名到月底")
+        self.assertNotContains(
+            self.client.get(reverse("events:day", args=[2026, 10, 20])), "报名到月底"
+        )
+
+    def test_day_page_empty_state(self):
+        response = self.client.get(reverse("events:day", args=[2026, 10, 7]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "这一天没有安排")
+
+    def test_day_page_rejects_impossible_date(self):
+        self.assertEqual(self.client.get(reverse("events:day", args=[2026, 2, 31])).status_code, 404)
+
+    def test_day_page_is_isolated_per_user(self):
+        Event.objects.create(
+            owner=make_user("other"),
+            title="别人的讲座",
+            status=Event.Status.CONFIRMED,
+            start_at=aware(2026, 10, 7, 19),
+        )
+        self.assertNotContains(
+            self.client.get(reverse("events:day", args=[2026, 10, 7])), "别人的讲座"
+        )
+
+    def test_complete_from_day_page_returns_to_that_day(self):
+        event = self._event("周三的讲座", start_at=aware(2026, 10, 7, 19))
+        day_url = reverse("events:day", args=[2026, 10, 7])
+        response = self.client.post(reverse("events:complete", args=[event.pk]), {"next": day_url})
+        self.assertRedirects(response, day_url)
+        event.refresh_from_db()
+        self.assertEqual(event.todo_status, Event.TodoStatus.DONE)
+
+    def test_done_event_shows_reopen_on_day_page(self):
+        event = self._event(
+            "周三的讲座",
+            start_at=aware(2026, 10, 7, 19),
+            todo_status=Event.TodoStatus.DONE,
+        )
+        response = self.client.get(reverse("events:day", args=[2026, 10, 7]))
+        self.assertContains(response, "已完成")
+        self.assertContains(response, reverse("events:reopen", args=[event.pk]))
 
 
 class IsolationTests(TestCase):
@@ -394,7 +550,7 @@ class IsolationTests(TestCase):
 
     def test_other_user_list_is_empty(self):
         self.client.force_login(self.other)
-        response = self.client.get(reverse("events:list"))
+        response = self.client.get(reverse("events:todo"), {"show": "all"})
         self.assertNotContains(response, "程序设计竞赛报名")
 
     def test_anonymous_is_redirected_to_login(self):
@@ -543,7 +699,7 @@ class TodoTimeColumnTests(TestCase):
 
 
 class EventListOrderTests(TestCase):
-    """US-10：事项列表按时间排序——有截止时间的看截止，没有的看开始。"""
+    """US-10：待办列表按时间排序——有截止时间的看截止，没有的看开始。"""
 
     def setUp(self):
         self.user = make_user("listorder")
@@ -561,7 +717,7 @@ class EventListOrderTests(TestCase):
         return Event.objects.create(**defaults)
 
     def _body(self):
-        response = self.client.get(reverse("events:list"))
+        response = self.client.get(reverse("events:todo"), {"show": "all"})
         self.assertEqual(response.status_code, 200)
         return response.content.decode("utf-8")
 
@@ -570,7 +726,7 @@ class EventListOrderTests(TestCase):
 
         不能直接 `body.index(标题)`：筛选项里的分类标签（作业、考试）会先命中。
         """
-        return re.findall(r'<a class="title-link" href="[^"]*">([^<]+)</a>', body)
+        return re.findall(r'class="title-link[^"]*"\s+href="[^"]*">([^<]+)</a>', body)
 
     def _order(self, body, *titles):
         rendered = self._row_titles(body)

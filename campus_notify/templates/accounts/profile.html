@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}账号 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -10,7 +11,7 @@
 
 <div class="grid-2">
   <div class="card">
-    <h3>偏好</h3>
+    <h3>{% icon "settings" %}偏好</h3>
     <form method="post">
       {% csrf_token %}
       {% for field in form %}
@@ -25,41 +26,40 @@
         <p class="small muted">服务端邮件提醒当前是关闭状态，提醒只在站内显示。</p>
       {% endif %}
       <div class="form-actions">
-        <button type="submit" class="btn">保存</button>
+        <button type="submit" class="btn">{% icon "check" %}保存</button>
       </div>
     </form>
   </div>
 
   <div class="card">
-    <h3>提醒送达</h3>
+    <h3>{% icon "mail" %}提醒送达</h3>
     <p class="small muted">提醒到点后会发到这个邮箱，同时在站内「通知」页留一份。</p>
     <div class="field">
       <div class="small muted">收件邮箱</div>
       <div>{{ reminder_email|default:"未绑定邮箱，无法收邮件提醒" }}</div>
     </div>
     <div class="stat-row">
-      <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">事项</div></div>
-      <div class="stat"><div class="num">{{ stats.messages }}</div><div class="label">原文</div></div>
-      <div class="stat"><div class="num">{{ stats.reminders }}</div><div class="label">提醒</div></div>
+      <div class="stat"><div class="num">{{ stats.events }}</div><div class="label">{% icon "list" 13 %}事项</div></div>
+      <div class="stat"><div class="num">{{ stats.messages }}</div><div class="label">{% icon "file-text" 13 %}原文</div></div>
+      <div class="stat"><div class="num">{{ stats.reminders }}</div><div class="label">{% icon "bell" 13 %}提醒</div></div>
     </div>
-    <p class="small muted">提醒按事项设置：打开任一事项的详情页就能增删、改时间或关掉它。</p>
     <div class="btn-row" style="margin-top:14px;">
-      <a class="btn ghost" href="{% url 'reminders:notifications' %}">通知</a>
-      <a class="btn ghost" href="{% url 'events:todo' %}">去待办里改提醒</a>
-      <a class="btn ghost" href="{% url 'core:data' %}">导出 / 删除</a>
-      <a class="btn ghost" href="{% url 'core:privacy' %}">隐私说明</a>
+      <a class="btn ghost" href="{% url 'reminders:notifications' %}">{% icon "bell" %}通知</a>
+      <a class="btn ghost" href="{% url 'events:todo' %}">{% icon "checklist" %}去待办里改提醒</a>
+      <a class="btn ghost" href="{% url 'core:data' %}">{% icon "download" %}导出 / 删除</a>
+      <a class="btn ghost" href="{% url 'core:privacy' %}">{% icon "shield" %}隐私说明</a>
     </div>
   </div>
 </div>
 
 <div class="card">
-  <h3>注销账号</h3>
+  <h3>{% icon "alert" %}注销账号</h3>
   <p class="small muted">会同时删除全部通知、事项与提醒，无法恢复。只想清空数据可到「我的数据」页。</p>
   <form method="post" action="{% url 'accounts:delete_account' %}">
     {% csrf_token %}
     <div class="btn-row">
       <input type="text" name="confirm" placeholder="输入「删除」确认" style="max-width:200px;">
-      <button type="submit" class="btn danger" data-confirm="确定注销账号并删除全部数据吗？">注销</button>
+      <button type="submit" class="btn danger" data-confirm="确定注销账号并删除全部数据吗？">{% icon "trash" %}注销</button>
     </div>
   </form>
 </div>

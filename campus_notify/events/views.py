@@ -7,8 +7,9 @@ from datetime import date, datetime, time, timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
-from django.http import HttpRequest, HttpResponse
+from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
@@ -42,6 +43,11 @@ from extraction.resolve import IncomingField, IngestPayload
 from reminders.services import OFFSET_UNIT_CHOICES, dispatch_due, offset_parts
 
 
+WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"]
+# 手机端日历格子里最多排几个彩点：再多也看不清，反正点开当天页就有全部
+CELL_DOT_LIMIT = 3
+
+
 # ---------------------------------------------------------------------------
 # 公共辅助
 # ---------------------------------------------------------------------------
@@ -72,6 +78,21 @@ def _user_events(request):
     return Event.objects.for_user(request.user)
 
 
+def _after_confirm(request: HttpRequest, pk: int) -> HttpResponse:
+    """确认通过后回哪里。
+
+    还有草稿排在「待确认」里就回那个队列继续处理（一次导入往往有多条），
+    全部处理完了才去看这条的结果——比每条都跳一次详情页少绕好几圈。
+    """
+    remaining = (
+        _user_events(request).filter(status=Event.Status.DRAFT).exclude(pk=pk).count()
+    )
+    if remaining:
+        messages.info(request, f"还有 {remaining} 条识别结果待确认。")
+        return redirect(f"{reverse('events:todo')}?show=draft")
+    return redirect("events:detail", pk=pk)
+
+
 # ---------------------------------------------------------------------------
 # 确认门（FR-05）
 # ---------------------------------------------------------------------------
@@ -96,12 +117,12 @@ def review(request: HttpRequest, pk: int) -> HttpResponse:
                 merge_events(event, candidate, relation=RELATION_SUPPLEMENT)
                 confirm_event(candidate, reminder_offsets=offsets)
                 messages.success(request, f"已合并到《{candidate.title}》，原文已并入该事项。")
-                return redirect("events:detail", pk=candidate.pk)
+                return _after_confirm(request, candidate.pk)
 
             set_fields_from_form(request.user, event, values, source="review")
             confirm_event(event, reminder_offsets=offsets)
             messages.success(request, "已保存，待办和日程里都能看到这条事项。")
-            return redirect("events:detail", pk=event.pk)
+            return _after_confirm(request, event.pk)
     else:
         form = ReviewForm(
             prefix=f"e{event.pk}", initial=_initial_from_event(event), extra_offsets=existing_offsets
@@ -175,72 +196,78 @@ def _field_rows(event: Event) -> list[dict]:
     return rows
 
 
-@login_required
-def review_list(request: HttpRequest) -> HttpResponse:
-    queryset = _user_events(request).filter(status=Event.Status.DRAFT).order_by("-last_updated_at")
-    batch_id = request.GET.get("batch")
-    if batch_id:
-        queryset = queryset.filter(batch_id=batch_id)
-    events = list(queryset[:20])
-    return render(request, "events/review_list.html", {"events": events, "batch_id": batch_id})
-
-
 # ---------------------------------------------------------------------------
-# 列表 / 待办 / 日程
+# 待办 / 待确认 / 日程
 # ---------------------------------------------------------------------------
 @login_required
-def event_list(request: HttpRequest) -> HttpResponse:
-    """US-10：事项总列表，按时间排序（截止优先，没有截止才看开始）。"""
+def todo_list(request: HttpRequest) -> HttpResponse:
+    """FR-06 / FR-12 / US-10：待办视图 + 完成状态。
+
+    「待确认」是待办下的一个子栏目（`?show=draft`）：识别完但用户还没确认的草稿
+    全在这里排队，确认通过后才落进下面的待办表。原来独立的「事项」栏目已经并入
+    本页——两者本来就是同一份数据（`Event.confirm` 一次确认同时进待办与日程），
+    分两个平级入口只会让用户猜该点哪个。随之搬过来的还有 US-10 的分类筛选
+    与 FR-14 的批量删除，功能一样不少，只是不再各有一页。
+    """
+    show = request.GET.get("show", "open")
+    if show not in {"draft", "open", "done", "all"}:
+        show = "open"
+
     form = QuickFilterForm(request.GET or None)
-    queryset = _user_events(request).exclude(status=Event.Status.DRAFT)
+    keyword = category = ""
     if form.is_valid():
         keyword = (form.cleaned_data.get("q") or "").strip()
         category = form.cleaned_data.get("category") or ""
+
+    drafts = _user_events(request).filter(status=Event.Status.DRAFT)
+    # 角标按「全部待确认」算，不受下面的筛选影响：筛选是为了看，不是为了藏
+    draft_count = drafts.count()
+    batch_id = (request.GET.get("batch") or "").strip()
+
+    if show == "draft":
+        # 刚识别完的一批草稿：带上 batch 就只看这一批，跟着导入的落点走
+        if batch_id.isdigit():
+            drafts = drafts.filter(batch_id=int(batch_id))
+        if keyword:
+            drafts = drafts.filter(title__icontains=keyword)
+        if category:
+            drafts = drafts.filter(category=category)
+        events = list(drafts.order_by("-last_updated_at")[:50])
+    else:
+        queryset = _user_events(request).filter(
+            saved_as_todo=True, status=Event.Status.CONFIRMED
+        )
+        if show == "open":
+            queryset = queryset.exclude(todo_status=Event.TodoStatus.DONE)
+        elif show == "done":
+            queryset = queryset.filter(todo_status=Event.TodoStatus.DONE)
         if keyword:
             queryset = queryset.filter(title__icontains=keyword)
         if category:
             queryset = queryset.filter(category=category)
-    queryset = queryset.order_by_time()
-    return render(
-        request,
-        "events/list.html",
-        {
-            "events": queryset[:200],
-            "form": form,
-            "draft_count": _user_events(request).filter(status=Event.Status.DRAFT).count(),
-        },
+        # 排序仍用同一把时间尺子（events/models.py::EventQuerySet.order_by_time）：
+        # 有截止时间的按截止排，只有开始时间的活动（讲座、比赛）按开始时间排，
+        # 否则它们会因为没有截止时间而全部沉到列表底部。
+        events = list(queryset.order_by_time()[:200])
+
+    confirmed_todos = _user_events(request).filter(
+        saved_as_todo=True, status=Event.Status.CONFIRMED
     )
-
-
-@login_required
-def todo_list(request: HttpRequest) -> HttpResponse:
-    """FR-06 / FR-12：待办视图 + 完成状态。"""
-    show = request.GET.get("show", "open")
-    category = request.GET.get("category", "")
-    queryset = _user_events(request).filter(saved_as_todo=True, status=Event.Status.CONFIRMED)
-    if show == "open":
-        queryset = queryset.exclude(todo_status=Event.TodoStatus.DONE)
-    elif show == "done":
-        queryset = queryset.filter(todo_status=Event.TodoStatus.DONE)
-    if category:
-        queryset = queryset.filter(category=category)
-    # 排序与事项列表共用同一把时间尺子（events/models.py::EventQuerySet.order_by_time）：
-    # 有截止时间的按截止排，只有开始时间的活动（讲座、比赛）按开始时间排，
-    # 否则它们会因为没有截止时间而全部沉到列表底部。
-    queryset = queryset.order_by_time()
-    done_count = _user_events(request).filter(
-        saved_as_todo=True,
-        status=Event.Status.CONFIRMED,
-        todo_status=Event.TodoStatus.DONE,
-    ).count()
+    done_count = confirmed_todos.filter(todo_status=Event.TodoStatus.DONE).count()
     return render(
         request,
         "events/todo.html",
         {
-            "events": queryset[:200],
+            "events": events,
             "show": show,
+            "form": form,
+            "keyword": keyword,
             "category": category,
+            "draft_count": draft_count,
             "done_count": done_count,
+            "open_count": confirmed_todos.count() - done_count,
+            "total_count": confirmed_todos.count(),
+            "batch_id": batch_id,
             "now": timezone.now(),
         },
     )
@@ -283,15 +310,7 @@ def calendar_view(request: HttpRequest) -> HttpResponse:
     prev_month = first - timedelta(days=1)
     next_month = (first + timedelta(days=31)).replace(day=1)
     rows = [
-        [
-            {
-                "date": day,
-                "in_month": day.month == month,
-                "is_today": day == today,
-                "events": by_day.get(day, []),
-            }
-            for day in week
-        ]
+        [_calendar_cell(day, month, today, by_day.get(day, [])) for day in week]
         for week in grid
     ]
     return render(
@@ -305,14 +324,100 @@ def calendar_view(request: HttpRequest) -> HttpResponse:
             "month_label": f"{year} 年 {month} 月",
             "prev": prev_month,
             "next": next_month,
-            "weekday_names": ["一", "二", "三", "四", "五", "六", "日"],
+            "weekday_names": WEEKDAY_NAMES,
         },
     )
+
+
+def _calendar_cell(day: date, month: int, today: date, events: list[Event]) -> dict:
+    """一个格子要渲染的全部信息。
+
+    桌面版格子里放得下几条日程文字，窄屏放不下（10px 字、40px 宽，既看不清也
+    点不准），所以格子同时准备了两份表达：`events` 给桌面版列表，`dots` 给窄屏
+    的彩点，`day_url` 是窄屏整格可点之后要去的「当天安排」页。
+    """
+    return {
+        "date": day,
+        "in_month": day.month == month,
+        "is_today": day == today,
+        "events": events,
+        "dots": [_dot_class(event) for event in events[:CELL_DOT_LIMIT]],
+        "day_url": reverse("events:day", args=[day.year, day.month, day.day]),
+        "label": f"{day.month} 月 {day.day} 日",
+    }
+
+
+def _dot_class(event: Event) -> str:
+    """彩点颜色与桌面版条目保持一致：橙=截止、蓝=日程、灰=已完成/已结束。"""
+    kind = "is-event" if event.start_at else "is-deadline"
+    return f"{kind} is-closed" if event.is_closed else kind
 
 
 def _deadline_or_start_q(range_start, range_end):
     return Q(start_at__gte=range_start, start_at__lt=range_end) | Q(
         deadline__gte=range_start, deadline__lt=range_end
+    )
+
+
+def _anchor_q(range_start, range_end):
+    """按「主时间」落在哪一天筛选，与月历把事项画进哪一格是同一把尺子。
+
+    月历用的是 `事件.start_at or 事件.deadline`（见 `_calendar_cell` 的调用方），
+    所以这里也必须是「有开始时间只看开始时间」。若写成 `Q(start_at in ...) |
+    Q(deadline in ...)`，一条 10/1 开始、10/20 截止的报名会同时出现在两天的
+    当天页里，而月历上只画在 10/1——点开格子看到的东西和格子上的对不上。
+    """
+    return Q(start_at__gte=range_start, start_at__lt=range_end) | Q(
+        start_at__isnull=True, deadline__gte=range_start, deadline__lt=range_end
+    )
+
+
+@login_required
+def day_view(request: HttpRequest, year: int, month: int, day: int) -> HttpResponse:
+    """FR-07：某一天的全部安排——窄屏从日程格子点进来的一页。
+
+    月历在手机上每格只有 40px 宽，格子里那几条 10px 的日程文字看不清也点不准。
+    与其把字再压小，不如让格子只回答「这天有没有事」（彩点），点开这一页看当天
+    的完整清单：标题、时间、状态、完成按钮都在这里。
+    """
+    try:
+        target = date(year, month, day)
+    except ValueError:
+        raise Http404("日期不存在")
+
+    tz = timezone.get_current_timezone()
+    range_start = timezone.make_aware(datetime.combine(target, time.min), tz)
+    range_end = range_start + timedelta(days=1)
+    events = list(
+        _user_events(request)
+        .filter(status=Event.Status.CONFIRMED, is_cancelled=False)
+        .filter(_anchor_q(range_start, range_end))
+        .prefetch_related("fields")
+    )
+    # 按当天的钟点排：9:00 的讲座排在 23:59 的作业截止前面
+    events.sort(key=lambda event: event.start_at or event.deadline)
+
+    previous_day = target - timedelta(days=1)
+    following_day = target + timedelta(days=1)
+    return render(
+        request,
+        "events/day.html",
+        {
+            "day": target,
+            "events": events,
+            "open_count": sum(1 for event in events if not event.is_closed),
+            "is_today": target == timezone.localdate(),
+            "weekday_name": WEEKDAY_NAMES[target.weekday()],
+            "prev_url": reverse(
+                "events:day", args=[previous_day.year, previous_day.month, previous_day.day]
+            ),
+            "next_url": reverse(
+                "events:day", args=[following_day.year, following_day.month, following_day.day]
+            ),
+            "calendar_year": target.year,
+            "calendar_month": target.month,
+            "now": timezone.now(),
+        },
     )
 
 
@@ -387,7 +492,7 @@ def delete_event(request: HttpRequest, pk: int) -> HttpResponse:
     title = event.title
     event.delete()
     messages.success(request, f"已删除《{title}》。")
-    return redirect(request.POST.get("next") or "events:list")
+    return redirect(request.POST.get("next") or "events:todo")
 
 
 @login_required
@@ -406,35 +511,19 @@ def bulk_delete(request: HttpRequest) -> HttpResponse:
             continue
     if not ids:
         messages.warning(request, "请先勾选要删除的事项。")
-        return redirect(request.POST.get("next") or "events:list")
+        return redirect(request.POST.get("next") or "events:todo")
 
     queryset = _user_events(request).filter(pk__in=ids)
     titles = list(queryset.values_list("title", flat=True)[:3])
     deleted = queryset.count()
     if not deleted:
         messages.info(request, "这些事项已经不存在了。")
-        return redirect(request.POST.get("next") or "events:list")
+        return redirect(request.POST.get("next") or "events:todo")
 
     queryset.delete()
     sample = "、".join(f"《{title}》" for title in titles)
     suffix = "等" if deleted > len(titles) else ""
     messages.success(request, f"已删除 {deleted} 条事项：{sample}{suffix}。")
-    return redirect(request.POST.get("next") or "events:list")
-
-
-@login_required
-@require_POST
-def delete_completed(request: HttpRequest) -> HttpResponse:
-    """一键清掉已完成的待办。"""
-    queryset = _user_events(request).filter(
-        saved_as_todo=True, todo_status=Event.TodoStatus.DONE
-    )
-    count = queryset.count()
-    queryset.delete()
-    if count:
-        messages.success(request, f"已删除 {count} 条已完成的待办。")
-    else:
-        messages.info(request, "没有已完成的待办。")
     return redirect(request.POST.get("next") or "events:todo")
 
 
@@ -469,7 +558,7 @@ def detach(request: HttpRequest, pk: int, link_id: int) -> HttpResponse:
     new_event = detach_message(event, message)
     if new_event is None:
         messages.info(request, "已拆出该原文，未识别到独立事项。")
-        return redirect("events:list")
+        return redirect("events:todo")
     messages.success(request, "已拆出为新的待确认事项，请核对后再保存。")
     return redirect("events:review", pk=new_event.pk)
 

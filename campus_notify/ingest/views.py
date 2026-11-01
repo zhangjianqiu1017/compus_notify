@@ -4,6 +4,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
 
@@ -101,27 +102,22 @@ def import_view(request: HttpRequest) -> HttpResponse:
         if len(drafts) == 1:
             return redirect("events:review", pk=drafts[0].pk)
         if len(drafts) > 1:
+            # 多条草稿不回逐条确认页，直接落到「待办 → 待确认」这个队列里排队处理
             messages.info(request, f"本次识别到 {len(drafts)} 个事项，请逐个确认。")
-            return redirect(f"{_reverse_review_list()}?batch={batch.pk}")
+            return redirect(f"{reverse('events:todo')}?show=draft&batch={batch.pk}")
         if result.merged:
             messages.success(
                 request,
                 f"内容已自动归并到已有事项：{'、'.join('《' + item.event.title + '》' for item in result.merged)}。",
             )
-            return redirect("events:list")
-        return redirect("events:list")
+            return redirect("events:todo")
+        return redirect("events:todo")
 
     return render(
         request,
         "ingest/import.html",
         {"prefill": prefill, "source": source},
     )
-
-
-def _reverse_review_list() -> str:
-    from django.urls import reverse
-
-    return reverse("events:review_list")
 
 
 @csrf_exempt

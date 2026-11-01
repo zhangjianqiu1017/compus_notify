@@ -30,6 +30,13 @@
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
   --shadow: 0 4px 16px -6px rgba(16, 24, 40, 0.12);
   --ring: 0 0 0 3px rgba(47, 111, 237, 0.16);
+
+  /* 移动端：底部 Tab 栏高度 + 刘海屏/圆角屏安全区。
+     --tabbar-h 会被 app.js 用实测值覆盖（含 safe-area），这里只是兜底。 */
+  --tabbar-h: 56px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-x: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
 }
 
 * { box-sizing: border-box; }
@@ -45,6 +52,8 @@ body {
   font-size: 15px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
+  /* 触摸屏上没有 hover，点按反馈靠 :active，不要系统那层灰色高亮 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -66,6 +75,9 @@ h2, h3 { line-height: 1.35; letter-spacing: -0.01em; }
   max-width: 1120px;
   margin: 0 auto;
   padding: 10px 20px;
+  /* 横屏刘海屏：左右留出安全区，别让内容压到圆角里 */
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
   display: flex;
   align-items: center;
   gap: 16px;
@@ -155,6 +167,8 @@ h2, h3 { line-height: 1.35; letter-spacing: -0.01em; }
   max-width: 1120px;
   margin: 0 auto;
   padding: 24px 20px 72px;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
 }
 
 .page-head {
@@ -177,6 +191,36 @@ h2, h3 { line-height: 1.35; letter-spacing: -0.01em; }
   font-size: 13.5px;
 }
 .page-head .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 首页日期行：今天的日期要一眼看见 —— 徽标 + 加粗数字，仍待在原来的副标题位置 */
+.page-head .sub.day-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--text-soft);
+}
+.day-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 21px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.day-date {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--accent-dark);
+  font-variant-numeric: tabular-nums;
+}
+.day-weekday { font-size: 13.5px; color: var(--text-soft); }
 
 .card {
   background: var(--surface);
@@ -206,7 +250,8 @@ h2, h3 { line-height: 1.35; letter-spacing: -0.01em; }
 
 .grid-2 {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* min() 是关键：窄屏下 320px 的最小列宽会把页面撑出横向滚动条 */
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 16px;
 }
 .grid-2 > .card { margin-bottom: 0; }
@@ -249,6 +294,8 @@ h2, h3 { line-height: 1.35; letter-spacing: -0.01em; }
   min-height: 30px;
 }
 .table-toolbar .btn { margin-left: auto; }
+/* 工具栏里的「全选」只在窄屏出现：宽屏用表头那个就够了 */
+.select-all-mobile { display: none; }
 td input[type="checkbox"],
 th input[type="checkbox"] {
   width: 16px;
@@ -270,6 +317,8 @@ th {
   font-size: 12.5px;
   background: var(--surface-sunken);
   white-space: nowrap;
+  /* 表头是字段名，居中排在列上方；单元格内容仍左对齐便于纵向扫读 */
+  text-align: center;
 }
 th:first-child { border-top-left-radius: var(--radius-sm); }
 th:last-child { border-top-right-radius: var(--radius-sm); }
@@ -277,6 +326,12 @@ tbody tr { transition: background 0.12s; }
 tbody tr:hover { background: #fcfcfd; }
 tbody tr:last-child td { border-bottom: 0; }
 td .title-link { font-weight: 550; }
+
+/* 表格里的操作区：三个小按钮（完成 / 编辑 / 删除）只排一行。
+   完成/删除各自裹在 <form> 里，加上 <a> 混排时最容易被挤到第二行，
+   看起来像「漏了一个按钮」；这里禁止换行，列宽交给表格按 min-content 撑开。
+   按钮组本身也居中，表头「操作」才和它同轴。 */
+.cell-actions .btn-row { flex-wrap: nowrap; justify-content: center; gap: 8px; }
 
 /* ---------------------------------------------------------------- 表单 */
 label {
@@ -308,7 +363,18 @@ input:focus, select:focus, textarea:focus {
   box-shadow: var(--ring);
 }
 textarea { min-height: 132px; resize: vertical; line-height: 1.6; }
-select { cursor: pointer; }
+/* 下拉框：iOS/Android 的原生箭头样式各不相同，统一抹平后自己画一个，
+   这样手机上「这行是可以点开选的」一眼能看出来（右侧留出箭头的位置） */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b93a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 14px;
+}
 
 .field { margin-bottom: 14px; }
 .form-row {
@@ -326,6 +392,81 @@ select { cursor: pointer; }
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+/* 提交行两端对齐：左边一句说明，主按钮贴到右侧，和页头的操作按钮成一条竖线 */
+.form-actions.split { justify-content: space-between; }
+.form-hint {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* 原文粘贴区：把「通知原文」当成一整个可聚焦的面板。
+   标题、字数、快捷键都收进这条头部，下面的输入区就没有边框了，
+   视觉上比「label + 裸 textarea」更像一块专门的粘贴区，也不会跟下面的
+   「来源」输入框抢注意力。焦点环由面板统一给（:focus-within）。 */
+.paste-panel {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  margin-bottom: 16px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.paste-panel:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+.paste-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 9px 14px;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--line);
+}
+.paste-panel-head label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+.paste-panel-head label svg { display: block; flex: none; opacity: 0.75; }
+.paste-meta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.paste-meta .sep {
+  width: 1px;
+  height: 11px;
+  background: var(--line-strong);
+}
+/* 输入区本身去掉边框和圆角，融进面板；resize 手柄留在面板内下角 */
+.paste-panel textarea {
+  display: block;
+  min-height: 216px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.75;
+  resize: vertical;
+}
+.paste-panel textarea:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+.paste-panel textarea::placeholder { color: #aab2be; }
 
 /* 输入框右侧内嵌一个动作按钮（如「发送验证码」）：
    整体保持一个输入框的外观，比"输入框 + 并排按钮"两个边框挨着更干净 */
@@ -435,8 +576,22 @@ select { cursor: pointer; }
 }
 .btn.danger-ghost:hover { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
 .btn.small { padding: 5px 11px; font-size: 13px; }
+/* 按钮内图标跟着文字走：不参与 flex 压缩，也不单独换行（文字过长时先断行保留图标） */
+.btn svg { flex: 0 0 auto; }
+.btn.small svg { margin-top: -1px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* ---------------------------------------------------------------- 图标 */
+/* {% icon %} 的输出：尺寸由标签给定，颜色一律跟随所在文字/按钮的 color，
+   所以危险按钮、次级按钮、深色主题都不用为图标再配一套颜色 */
+.icon { flex: 0 0 auto; vertical-align: -0.18em; }
+/* 卡片小标题里的图标表示「这是哪一块」，不是内容：压成灰的别抢标题 */
+.card h3 .icon,
+.card-header h3 .icon { color: var(--text-faint); margin-right: 6px; }
+/* 统计块的字段名：图标和文字一起居中，换行时图标不会掉到第二行 */
+.stat .label { display: inline-flex; align-items: center; gap: 5px; }
+.stat .label .icon { color: var(--text-faint); }
 
 /* ---------------------------------------------------------------- 标签 */
 .tag {
@@ -572,6 +727,140 @@ select { cursor: pointer; }
 .msg-info { border-color: #d5e2fb; background: #fafcff; }
 .msg-info::before { background: var(--accent); }
 
+/* ---------------------------------------------------------------- 等待态 */
+/* 需要等服务端的操作（登录、注册、发验证码、识别原文）分三档反馈，
+   按「要等多久」递进，别一上来就甩全屏遮罩：
+   1. spinner：任何提交按钮都自动有，spinner 就长在被点的那个按钮里；
+   2. 等待文案：「开始识别」变成「正在识别…」，说清在等什么；
+   3. 全屏遮罩：发邮件、识别这种要等好几秒的，明确告诉用户「在处理，别走」。
+   颜色一律走 currentColor，主按钮、次级按钮、危险按钮都不用单独配色。 */
+.spinner {
+  --spinner-size: 14px;
+  flex: 0 0 auto;
+  display: inline-block;
+  width: var(--spinner-size);
+  height: var(--spinner-size);
+  border: 2px solid currentColor;
+  /* 三面实线 + 一面透明 = 一个缺口，转起来才看得出在动 */
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.16em;
+  animation: spinner-spin 0.62s linear infinite;
+}
+/* 遮罩里的 spinner 是这一屏唯一的主体，放大加粗 */
+.spinner-lg { --spinner-size: 28px; border-width: 3px; }
+
+@keyframes spinner-spin { to { transform: rotate(1turn); } }
+
+/* 提交中：按钮不再响应点击。
+   这里刻意不用 disabled——一旦设了 disabled，按钮的 name/value 会被浏览器
+   从提交数据里剔除（「仍然重新识别」靠 name=reuse value=1 告诉后端），
+   改用 data-busy + pointer-events 挡住第二次点击。 */
+.btn[data-busy],
+.input-group-action[data-busy] {
+  pointer-events: none;
+  cursor: progress;
+}
+/* 文案换成「正在识别…」后按钮宽度会变，JS 会锁住 min-width，这里只兜住间距 */
+.btn[data-busy] { gap: 7px; }
+
+@keyframes spinner-breathe {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 1; }
+}
+
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90; /* 压在轻提示(60)上面：这一层代表「整页都在忙」 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  padding-bottom: calc(20px + var(--safe-b));
+  background: rgba(246, 247, 249, 0.86);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  /* 遮罩上起手的滑动手势不再带动底下的表单：等的时候别让页面跟着滑走 */
+  touch-action: none;
+  animation: busy-in 0.16s ease-out;
+}
+.busy-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(340px, 100%);
+  padding: 26px 24px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.busy-card .spinner { color: var(--accent); }
+.busy-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.busy-tip {
+  margin: 0;
+  /* 提示语每 2.6 秒换一句：高度按两行留够，换句时卡片不会上下跳 */
+  min-height: 2.9em;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-faint);
+  transition: opacity 0.25s;
+}
+.busy-tip.is-fading { opacity: 0; }
+/* 等过了头才出现的一句安抚：字号比提示语再小一号，不抢「正在处理」这件事 */
+.busy-slow {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+/* 顶边走马灯：不知道还要等多久的请求，用「一直在走」代替假的百分比 */
+.busy-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(47, 111, 237, 0.15);
+}
+.busy-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: busy-slide 1.15s ease-in-out infinite;
+}
+
+@keyframes busy-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes busy-slide {
+  from { left: -38%; }
+  to { left: 100%; }
+}
+
+/* 减少动效：环形缺口不再旋转，改成呼吸式明暗——仍然看得出「在等」，但不晃眼 */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    border-top-color: currentColor;
+    border-right-color: transparent;
+    animation: spinner-breathe 1.6s ease-in-out infinite;
+  }
+  .busy-overlay { animation: none; }
+  .busy-bar::after { animation: none; left: 0; width: 100%; opacity: 0.55; }
+  .busy-tip { transition: none; }
+}
+
 /* ---------------------------------------------------------------- 证据 */
 .evidence {
   background: var(--surface-sunken);
@@ -631,6 +920,23 @@ mark {
 .list-item-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .list-item-head .meta { color: var(--text-faint); font-size: 12.5px; }
 
+/* 通知列表：左侧红点 = 从未读过。读过的只留透明占位，
+   保证所有条目的标题左边缘对齐，视线不用跳。 */
+.notif-item { display: flex; align-items: flex-start; gap: 9px; }
+.notif-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  /* 按第一行文字的中线对齐，而不是贴着行首顶边 */
+  margin-top: 9px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.notif-dot.is-read { background: transparent; }
+.notif-body { flex: 1 1 auto; min-width: 0; }
+/* 未读的标题加重一点，红点之外再给一层弱提示（色盲用户也能区分） */
+.notif-item .title-link.is-unread { font-weight: 650; }
+
 /* ---------------------------------------------------------------- 空状态 */
 .empty {
   text-align: center;
@@ -638,6 +944,40 @@ mark {
   color: var(--text-faint);
 }
 .empty p { margin: 0 0 12px; }
+
+/* 首页「最近 7 天」的空态插图：日历打勾，颜色全走变量，深浅主题都不会花 */
+.empty-art {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 14px;
+}
+.empty-art .art-bg { fill: var(--accent-soft); }
+.empty-art .art-box {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.empty-art .art-line,
+.empty-art .art-check {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.empty-art .art-check { stroke-width: 3; }
+/* 搜索空态的放大镜手柄：粗一点的圆头线，和细线内容区分开 */
+.empty-art .art-handle {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+.empty .empty-title { color: var(--text-soft); font-weight: 550; margin-bottom: 6px; }
+.empty .empty-hint { color: var(--text-faint); font-size: 13px; margin-bottom: 14px; }
+/* 空态里的下一步按钮居中排，别贴着左边缘 */
+.empty .btn-row { justify-content: center; }
 
 /* ---------------------------------------------------------------- 日历 */
 .calendar { width: 100%; border-collapse: separate; border-spacing: 4px; table-layout: fixed; }
@@ -661,13 +1001,30 @@ mark {
 .calendar td:hover { border-color: var(--line-strong); }
 .calendar td.out-of-month { background: transparent; border-color: transparent; }
 .calendar td.out-of-month .day-num { opacity: 0.35; }
-.calendar td.today { border-color: var(--accent); box-shadow: var(--ring); }
+.calendar td.today {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: var(--ring);
+}
 .calendar .day-num {
   font-size: 12px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
-.calendar td.today .day-num { color: var(--accent-dark); font-weight: 650; }
+/* 今天这一格：日期本身做成实心胶囊，扫一眼就知道「今天是哪格」 */
+.calendar td.today .day-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.calendar .day-num-today { letter-spacing: 0.02em; }
 .calendar .cal-event {
   display: block;
   font-size: 11.5px;
@@ -686,6 +1043,27 @@ mark {
 /* 已完成/已结束的日程条目同样压成灰色 */
 .calendar .cal-event.is-closed { background: var(--surface-sunken); color: var(--text-faint); }
 .calendar .cal-event.is-closed:hover { background: var(--line); color: var(--text-soft); }
+/* 今天这一格底色是浅蓝，普通日程条也是浅蓝会糊进去，所以今天格里标回白底 */
+.calendar td.today .cal-event:not(.is-deadline):not(.is-closed) { background: var(--surface); }
+.calendar td.today .cal-event:not(.is-deadline):not(.is-closed):hover { background: #e2ebfd; }
+/* 窄屏那套表达（彩点 + 整格可点）在桌面版一律不占位：
+   桌面格子里日程条目本身就是链接，盖一层整格链接会把它们全挡掉 */
+.cal-dots { display: none; }
+.cal-cell-link { display: none; }
+
+/* ---------------------------------------------------------------- 某一天的安排 */
+/* 窄屏点格子进来的一页：一列「时间 + 事项」，行距按拇指滑动来给，别挤成表格 */
+.day-list > li { padding: 13px 0; }
+.day-time {
+  flex: none;
+  min-width: 44px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+.day-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.day-actions { margin-top: 9px; }
 
 /* ---------------------------------------------------------------- 登录 */
 .auth-wrap {
@@ -728,12 +1106,18 @@ mark {
   max-width: 1120px;
   margin: 0 auto;
   padding: 4px 20px 40px;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
   color: var(--text-faint);
   font-size: 13px;
   display: flex;
   gap: 16px;
   justify-content: center;
+  flex-wrap: wrap;
 }
+/* 页脚 / 登录页底部的文字链接也带图标：用 inline-flex 让图标和文字对齐到一条中线 */
+.footer a,
+.auth-foot a { display: inline-flex; align-items: center; gap: 5px; }
 
 /* ---------------------------------------------------------------- 提醒编辑 */
 .list-actions {
@@ -775,6 +1159,7 @@ details.inline-edit > summary {
   list-style: none;
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   padding: 5px 11px;
   font-size: 13px;
   color: var(--text-soft);
@@ -796,6 +1181,22 @@ details.inline-edit[open] > summary { margin-bottom: 4px; }
 /* ---------------------------------------------------------------- 工具 */
 .muted { color: var(--text-faint); }
 .small { font-size: 13px; }
+/* 同一句说明在两种布局下说法不同（桌面讲颜色，手机讲点格子）：
+   默认只出桌面那句，窄屏再对调（规则在下面 768px 段里） */
+.mobile-only { display: none; }
+/* 只给读屏软件看的文字：视觉上不占位，但语义仍在（如红点代表的「未读」） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 .strong { font-weight: 600; }
 .overdue { color: var(--danger); font-weight: 600; }
 .done { text-decoration: line-through; color: var(--text-faint); }
@@ -813,18 +1214,328 @@ details.inline-edit[open] > summary { margin-bottom: 4px; }
 .stack > * + * { margin-top: 10px; }
 .divider-line { height: 1px; background: var(--line); margin: 16px 0; border: 0; }
 
-@media (max-width: 720px) {
-  .container { padding: 18px 14px 56px; }
-  .toast-stack, .toast-dock { left: 14px; right: 14px; width: auto; }
-  .toast-dock { bottom: 14px; }
-  .topbar-inner { padding: 9px 14px; gap: 10px; }
-  .nav { gap: 0; }
-  .nav a, .nav .link-button { padding: 6px 9px; font-size: 13.5px; gap: 4px; }
-  .nav svg { width: 13px; height: 13px; }
-  .card { padding: 15px; }
-  .table-wrap { margin: 0 -15px; padding: 0 15px; }
-  .calendar { border-spacing: 2px; }
-  .calendar td { height: 76px; padding: 4px; }
-  .calendar .cal-event { font-size: 11px; }
+/* ==========================================================================
+   移动端适配（≤ 768px）
+   思路：顶部只留品牌 + 三个图标，主导航沉到底部 Tab 栏（拇指可达）；
+        表格改成卡片，点按目标放大到 40px 以上，输入框 16px 防止 iOS 自动缩放。
+   断点统一 768px：横屏手机（如 812×375）仍走桌面布局，不会被挤成两行。
+   ========================================================================== */
+
+/* 底部 Tab 栏与顶部图标在桌面宽度下不占位 */
+.tabbar,
+.topbar-mobile { display: none; }
+.tab { user-select: none; }
+
+@media (max-width: 768px) {
+  /* ------------------------------------------------------------ 骨架 */
+  /* 同一句说明在两种布局下说法不同（日历图例：桌面讲颜色，手机讲点格子） */
+  .desktop-only { display: none; }
+  .mobile-only { display: block; }
+  .container {
+    padding: 16px max(14px, env(safe-area-inset-left, 0px)) 56px;
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+  }
+  /* 底部 Tab 栏是 fixed，给 body 留出等高的空白，最后一行内容才不会被挡住 */
+  body.has-tabbar { padding-bottom: calc(var(--tabbar-h) + 8px); }
+
+  .card { padding: 15px; border-radius: var(--radius); }
+  .card-header { gap: 10px; }
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
   .page-head h1, .page-head h2 { font-size: 19px; }
+  .page-head .sub { font-size: 13px; }
+  /* 手机上日期行仍保持加粗可辨，但别把标题挤到换行 */
+  .page-head .sub.day-line { gap: 6px; margin-top: 5px; font-size: 13px; }
+  .day-badge { height: 20px; padding: 0 8px; font-size: 11.5px; }
+  .day-date { font-size: 15px; }
+
+  /* 页面操作按钮：等分铺满一行，不再挤成一条窄带 */
+  .page-head .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .page-head .actions > * { flex: 1 1 auto; }
+  .page-head .actions > form { display: flex; }
+  .page-head .actions > form > .btn,
+  .page-head .actions > form > button { width: 100%; }
+
+  /* ------------------------------------------------------------ 顶栏 */
+  .topbar-inner { padding: 8px 14px; gap: 8px; flex-wrap: nowrap; }
+  .topbar-mobile { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+  .nav { display: none; } /* 主导航在底部 Tab 栏 */
+  .icon-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    color: var(--text-soft);
+    flex: none;
+  }
+  .icon-btn:active { background: var(--surface-sunken); color: var(--text); }
+  .icon-btn .badge {
+    position: absolute;
+    top: 4px;
+    right: 3px;
+    min-width: 17px;
+    height: 17px;
+    line-height: 17px;
+    font-size: 10.5px;
+    padding: 0 4px;
+  }
+  .icon-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1;
+  }
+
+  /* ------------------------------------------------------------ Tab 栏 */
+  .tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40; /* 低于轻提示(60)：提示要能盖在 Tab 栏上面 */
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    padding-bottom: var(--safe-b);
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: saturate(180%) blur(14px);
+    border-top: 1px solid var(--line);
+  }
+  .tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 52px;
+    padding: 6px 2px;
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--text-soft);
+    text-align: center;
+  }
+  .tab svg { width: 22px; height: 22px; flex: none; opacity: 0.85; }
+  .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab:active { background: var(--surface-sunken); }
+  /* 高亮 = 当前就在这一栏，只有 .active 才能上主色 */
+  .tab.active { color: var(--accent-dark); font-weight: 600; }
+  .tab.active svg { opacity: 1; }
+  /* 导入是主入口（拇指正中间）：只让图标比别的 Tab 更实、更粗（线宽在模板里给到
+     1.9），不给主色。以前这里无条件 color: accent，结果任何页面看上都像停在导入页，
+     Tab 栏就失去了“我在哪”的作用。 */
+  .tab.tab-primary svg { opacity: 1; }
+
+  /* ------------------------------------------------------------ 轻提示 */
+  .toast-stack, .toast-dock { left: 14px; right: 14px; width: auto; }
+  .toast-stack { --toast-top: 62px; }
+  .toast-dock { bottom: calc(var(--tabbar-h) + 12px); }
+  .toast-close { padding: 6px 8px; font-size: 13px; } /* 手指点得中 */
+
+  /* ------------------------------------------------------------ 等待态 */
+  /* 手机上遮罩卡片收窄一点，别在窄屏里贴着边；顶部 Tab 栏之上也留出安全区 */
+  .busy-overlay { padding: 16px; padding-bottom: calc(16px + var(--tabbar-h)); }
+  .busy-card { padding: 24px 18px 20px; }
+
+  /* ------------------------------------------------------------ 表格卡片化 */
+  /* 手机上横向滚动的表格等于「看不全也点不准」：整张表拆成一张张卡片，
+     td 的字段名由模板里的 data-label 提供（::before 读属性，不用复制文案）。 */
+  .table-wrap { margin: 0; padding: 0; overflow: visible; }
+  .table-stack,
+  .table-stack tbody { display: block; width: 100%; }
+  .table-stack thead { display: none; }
+  .table-stack tr {
+    display: block;
+    position: relative;
+    margin: 0 0 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .table-stack tr:last-child { margin-bottom: 0; }
+  .table-stack tr:hover { background: var(--surface); }
+  .table-stack td {
+    display: block;
+    padding: 2px 0;
+    border-bottom: 0;
+    font-size: 13.5px;
+  }
+  .table-stack td::before {
+    content: attr(data-label);
+    display: inline-block;
+    min-width: 46px;
+    margin-right: 6px;
+    color: var(--text-faint);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+  .table-stack td:not([data-label])::before { display: none; }
+  .table-stack .cell-check { position: absolute; top: 4px; right: 4px; padding: 6px; }
+  .table-stack .cell-check input[type="checkbox"] { width: 20px; height: 20px; display: block; }
+  .table-stack .cell-title {
+    padding-right: 30px; /* 给右上角勾选框留位 */
+    font-size: 15.5px;
+    font-weight: 550;
+    line-height: 1.4;
+  }
+  .table-stack .cell-title + td { padding-top: 4px; }
+  .table-stack .cell-actions {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--line);
+  }
+  /* 卡片里的操作按钮平铺等宽；极窄屏允许回退成两行，别把按钮压成方块 */
+  .table-stack .cell-actions .btn-row { gap: 6px; flex-wrap: wrap; }
+  .table-stack .cell-actions .btn { flex: 1 1 auto; }
+  .table-stack .nowrap { white-space: normal; }
+  /* 勾选框和「删除所选」在同一行：缩小按钮，说明文字独占一行 */
+  .table-toolbar { flex-wrap: wrap; }
+  .table-toolbar .btn { margin-left: 0; }
+  .select-all-mobile {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-soft);
+  }
+  .select-all-mobile input[type="checkbox"] { width: 20px; height: 20px; margin: 0; }
+
+  /* ------------------------------------------------------------ 表单 */
+  /* 16px 是 iOS Safari 的自动缩放阈值：小于它，聚焦输入框整页会被放大 */
+  input[type="text"],
+  input[type="password"],
+  input[type="email"],
+  input[type="number"],
+  input[type="datetime-local"],
+  select,
+  textarea {
+    font-size: 16px;
+    min-height: 42px;
+  }
+  textarea { min-height: 132px; line-height: 1.6; }
+  label { font-size: 13px; }
+  .form-row { grid-template-columns: 1fr; gap: 12px; }
+  .checkbox-grid { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+  .checkbox-grid label,
+  .radio-row label { padding: 9px 11px; font-size: 14px; } /* 点得准 */
+  .form-actions { gap: 8px; }
+  .form-actions > .btn { flex: 1 1 140px; }
+  /* 提交行在窄屏换成一列：说明在上、按钮撑满整行，拇指够得着 */
+  .form-actions.split {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .form-actions.split .form-hint { max-width: none; }
+  .form-actions.split .btn-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  /* 粘贴区：面板上下都留白，头部只保留字数（手机没有 Ctrl+Enter） */
+  .paste-panel-head { padding: 8px 12px; }
+  .paste-meta .hotkey-hint,
+  .paste-meta .sep { display: none; }
+  .paste-panel textarea { min-height: 176px; padding: 12px 13px; }
+  /* 输入框内嵌「发送验证码」按钮：窄屏下按钮收窄，输入框多留点位置 */
+  .input-group > input { padding-right: 112px; }
+  .input-group-action { font-size: 12.5px; padding: 0 10px; }
+
+  /* ------------------------------------------------------------ 按钮 */
+  .btn { min-height: 40px; padding: 9px 14px; }
+  .btn.small { min-height: 34px; padding: 6px 11px; }
+  .btn-row .btn { flex: 0 1 auto; }
+
+  /* ------------------------------------------------------------ 日历 */
+  /* 窄屏格子承载不了正文（40px 宽 + 10px 字，看不清也点不准），
+     所以只回答「这天有没有事」：三个彩点 + 整格可点，点开看当天的完整清单。
+     桌面版那套 `.cal-events` 在这里彻底收起来，换成 `.cal-dots`。 */
+  .calendar { border-spacing: 2px; }
+  .calendar th { font-size: 10.5px; padding: 3px 0; }
+  .calendar td {
+    position: relative;
+    height: 64px;
+    padding: 3px;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .calendar .day-num { font-size: 10.5px; }
+  /* 窄屏格子塞不下「今天」两个字，只留实心日期胶囊 */
+  .calendar .day-num-today { display: none; }
+  .calendar td.today .day-num { padding: 0 5px; font-size: 10px; gap: 0; }
+  .calendar .cal-events { display: none; }
+  .calendar .cal-dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+  .cal-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); }
+  .cal-dot.is-deadline { background: var(--warn); }
+  .cal-dot.is-closed { background: var(--text-faint); }
+  /* 整格的点击面盖在格子上：条目链接在窄屏已经藏起来了，不会抢点击 */
+  .cal-cell-link { display: block; position: absolute; inset: 0; z-index: 2; border-radius: inherit; }
+  /* 触摸没有 hover，按下时给一格底色当作「点到了」的回执 */
+  .calendar td.has-events:active { border-color: var(--accent); background: var(--accent-soft); }
+  .cal-legend { margin-top: 10px; }
+
+  /* ------------------------------------------------------------ 其它 */
+  .reminder-list .list-actions { margin-left: 0; }
+  .offset-input { gap: 6px; }
+  .offset-input input[type="number"] { width: 76px; }
+  .list-actions .btn { flex: 1 1 auto; }
+  details.inline-edit[open] .offset-input { flex-wrap: wrap; }
+  .stat-row { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
+  .stat { padding: 10px 12px; }
+  .stat .num { font-size: 19px; }
+  .footer { gap: 12px; flex-wrap: wrap; padding-bottom: 32px; }
+  .empty { padding: 28px 12px; }
+  /* 手机上插图收一号，别把「没有要处理的事」挤到需要滚动才看得见 */
+  .empty-art { width: 76px; height: 76px; margin-bottom: 10px; }
+
+  /* 登录 / 注册：卡片在手机上铺满，底部对齐可视区域 */
+  .auth-wrap {
+    min-height: 100vh;
+    min-height: 100dvh; /* 移动端地址栏收起/展开时 100vh 会失真 */
+    padding: 24px 14px;
+    align-items: flex-start;
+  }
+  .auth-card { padding: 22px 18px; border-radius: var(--radius); }
+  .auth-card .form-actions .btn { flex: 1 1 auto; }
+}
+
+/* 极窄屏（iPhone SE / 320px）：品牌名让位给图标，别把顶栏挤成两行 */
+@media (max-width: 380px) {
+  .topbar .brand-name { display: none; }
+  .tab { font-size: 10.5px; }
+  :root { --tabbar-h: 52px; }
+}
+
+/* 触摸设备没有 hover：去掉会「粘住」的悬停态，避免点完一直是高亮色 */
+@media (hover: none) {
+  a:hover { color: var(--accent); }
+  .nav a:hover, .nav .link-button:hover { background: none; color: var(--text-soft); }
+  .nav a.active:hover { background: var(--accent-soft); color: var(--accent-dark); }
+  .btn:hover { background: var(--accent); color: #fff; }
+  .btn.secondary:hover { background: var(--accent-soft); color: var(--accent-dark); }
+  .btn.ghost:hover { background: var(--surface); color: var(--text-soft); border-color: var(--line-strong); }
+  .btn.danger:hover { background: var(--danger); }
+  .btn.danger-ghost:hover { background: var(--surface); color: var(--danger); border-color: #f0cfcc; }
+  tbody tr:hover { background: none; }
+  .checkbox-grid label:hover,
+  .radio-row label:hover { border-color: var(--line); background: none; }
+  .calendar td:hover { border-color: var(--line); }
+  .calendar .cal-event:hover { background: var(--accent-soft); color: var(--accent-dark); }
+  .input-group-action:hover { background: var(--accent-soft); }
+  .toast-close:hover { background: none; color: var(--text-faint); }
 }

@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}搜索 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <h1>搜索</h1>
-    <p class="sub">{% if keyword %}「{{ keyword }}」命中 {{ total }} 条{% else %}在历史通知与事项里查找{% endif %}</p>
+    {% if keyword %}<p class="sub">「{{ keyword }}」命中 {{ total }} 条</p>{% endif %}
   </div>
 </div>
 
@@ -12,14 +13,33 @@
   <form method="get">
     <div class="btn-row">
       <input type="text" name="q" value="{{ keyword }}" placeholder="课程名、地点、关键词…" style="max-width:420px;">
-      <button class="btn" type="submit">搜索</button>
+      <button class="btn" type="submit">{% icon "search" %}搜索</button>
     </div>
   </form>
 </div>
 
 {% if keyword %}
+{% if not total %}
+  {# 搜了但一条没中：别甩两张「没有匹配的XX」的空白卡片，给一张插图 + 下一步 #}
   <div class="card">
-    <h3>事项</h3>
+    <div class="empty">
+      <svg class="empty-art" viewBox="0 0 96 96" width="96" height="96" aria-hidden="true" focusable="false">
+        <circle class="art-bg" cx="48" cy="48" r="40"></circle>
+        <circle class="art-box" cx="43" cy="43" r="17"></circle>
+        <path class="art-line" d="M39 39l8 8M47 39l-8 8"></path>
+        <path class="art-handle" d="M55.5 55.5 67.5 67.5"></path>
+      </svg>
+      <p class="empty-title">没有搜到「{{ keyword }}」相关的内容</p>
+      <p class="empty-hint">试试只留一个词（课程名、地点、老师），或者检查一下有没有错别字。搜索会同时找已确认的事项和历史通知原文。</p>
+      <div class="btn-row">
+        <a class="btn secondary small" href="{% url 'core:search' %}">{% icon "search" 14 %}清空关键词</a>
+        <a class="btn ghost small" href="{% url 'ingest:import' %}">{% icon "import" 14 %}导入一条通知</a>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="card">
+    <h3>{% icon "list" %}事项</h3>
     <ul class="list-plain">
       {% for event in events %}
         <li class="{% if event.is_closed %}is-closed{% endif %}">
@@ -44,7 +64,7 @@
   </div>
 
   <div class="card">
-    <h3>原文</h3>
+    <h3>{% icon "file-text" %}原文</h3>
     {% for message in messages %}
       <div style="margin-bottom:14px;">
         <div class="list-item-head" style="margin-bottom:6px;">
@@ -57,10 +77,19 @@
       <p class="muted small">没有匹配的原文</p>
     {% endfor %}
   </div>
+{% endif %}
 {% else %}
   <div class="card">
+    {# 未输入关键词时给个画面：光一行灰字容易被当成「还没加载完」，插图更像「等你来搜」 #}
     <div class="empty">
-      <p>输入关键词开始检索</p>
+      <svg class="empty-art" viewBox="0 0 96 96" width="96" height="96" aria-hidden="true" focusable="false">
+        <circle class="art-bg" cx="48" cy="48" r="40"></circle>
+        <circle class="art-box" cx="43" cy="43" r="17"></circle>
+        <path class="art-line" d="M36 39h14M36 46h9"></path>
+        <path class="art-handle" d="M55.5 55.5 67.5 67.5"></path>
+      </svg>
+      <p class="empty-title">输入关键词开始检索</p>
+      <p class="empty-hint">课程名、地点、老师、事项标题都能搜，历史通知正文和已确认的事项会一起找。</p>
     </div>
   </div>
 {% endif %}

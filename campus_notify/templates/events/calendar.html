@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}日程 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -7,14 +8,15 @@
     <p class="sub">{{ month_label }}</p>
   </div>
   <div class="actions">
-    <a class="btn ghost" href="?year={{ prev.year }}&month={{ prev.month }}">上一月</a>
-    <a class="btn ghost" href="{% url 'events:calendar' %}">本月</a>
-    <a class="btn ghost" href="?year={{ next.year }}&month={{ next.month }}">下一月</a>
-    <a class="btn secondary" href="{% url 'core:export_ics' %}">导出日历</a>
+    <a class="btn ghost" href="?year={{ prev.year }}&month={{ prev.month }}">{% icon "chevron-left" %}上一月</a>
+    <a class="btn ghost" href="{% url 'events:calendar' %}">{% icon "calendar" %}本月</a>
+    <a class="btn ghost" href="?year={{ next.year }}&month={{ next.month }}">下一月{% icon "chevron-right" %}</a>
+    <a class="btn secondary" href="{% url 'core:export_ics' %}">{% icon "download" %}导出日历</a>
   </div>
 </div>
 
 <div class="card">
+  {# 同一格准备两份表达：桌面版排日程条目，窄屏只留彩点 + 整格可点（窄屏塞正文是「看不清也点不准」，见 README 三点八） #}
   <table class="calendar">
     <thead>
       <tr>{% for name in weekday_names %}<th>周{{ name }}</th>{% endfor %}</tr>
@@ -23,21 +25,36 @@
       {% for week in rows %}
       <tr>
         {% for cell in week %}
-        <td class="{% if not cell.in_month %}out-of-month{% endif %} {% if cell.is_today %}today{% endif %}">
-          <div class="day-num">{{ cell.date|date:"n/j" }}</div>
-          {% for event in cell.events %}
-            <a class="cal-event {% if not event.start_at %}is-deadline{% endif %} {% if event.is_closed %}is-closed{% endif %}"
-               href="{% url 'events:detail' event.pk %}"
-               title="{{ event.title }}{% if event.deadline %}（截止 {{ event.deadline|date:'m-d H:i' }}）{% endif %}">
-              {% if event.start_at %}{{ event.start_at|date:"H:i" }} {% endif %}{{ event.title }}
+        <td class="cal-cell{% if not cell.in_month %} out-of-month{% endif %}{% if cell.is_today %} today{% endif %}{% if cell.events %} has-events{% endif %}">
+          <div class="day-num">{% if cell.is_today %}<span class="day-num-today">今天</span>{% endif %}{{ cell.date|date:"n/j" }}</div>
+          <div class="cal-events">
+            {% for event in cell.events %}
+              <a class="cal-event {% if not event.start_at %}is-deadline{% endif %} {% if event.is_closed %}is-closed{% endif %}"
+                 href="{% url 'events:detail' event.pk %}"
+                 title="{{ event.title }}{% if event.deadline %}（截止 {{ event.deadline|date:'m-d H:i' }}）{% endif %}">
+                {% if event.start_at %}{{ event.start_at|date:"H:i" }} {% endif %}{{ event.title }}
+              </a>
+            {% endfor %}
+          </div>
+          {# 有事的格子窄屏显示这几个彩点：橙=截止、蓝=日程、灰=已结束。多于 3 条就不再画了 #}
+          <div class="cal-dots" aria-hidden="true">
+            {% for dot in cell.dots %}<span class="cal-dot {{ dot }}"></span>{% endfor %}
+          </div>
+          {% if cell.events %}
+            {# 整格的点击面：只在窄屏展开（桌面版条目本身就是链接，不能盖住它们） #}
+            <a class="cal-cell-link" href="{{ cell.day_url }}">
+              <span class="sr-only">{{ cell.label }}共 {{ cell.events|length }} 项，查看当天安排</span>
             </a>
-          {% endfor %}
+          {% endif %}
         </td>
         {% endfor %}
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <p class="small muted" style="margin:12px 0 0;">橙色为截止，蓝色为日程，灰色为已完成或已结束。</p>
+  <p class="small muted cal-legend" style="margin:12px 0 0;">
+    <span class="desktop-only">橙色为截止，蓝色为日程，灰色为已完成或已结束。</span>
+    <span class="mobile-only">橙点截止 · 蓝点日程 · 灰点已结束，点格子看当天全部安排。</span>
+  </p>
 </div>
 {% endblock %}

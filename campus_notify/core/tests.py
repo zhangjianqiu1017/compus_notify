@@ -46,12 +46,12 @@ class AllPagesRenderTests(TestCase):
             reverse("accounts:profile"),
             reverse("ingest:import"),
             reverse("ingest:batch", args=[self.batch.pk]),
-            reverse("events:list"),
             reverse("events:todo"),
             reverse("events:todo") + "?show=done",
+            reverse("events:todo") + "?show=draft",
             reverse("events:calendar") + "?year=2026&month=10",
+            reverse("events:day", args=[2026, 10, 20]),
             reverse("events:create"),
-            reverse("events:review_list"),
             reverse("events:detail", args=[self.draft.pk]),
             reverse("events:edit", args=[self.draft.pk]),
             reverse("reminders:notifications"),
@@ -75,11 +75,11 @@ class AllPagesRenderTests(TestCase):
         pages = [
             reverse("core:home"),
             reverse("ingest:import"),
-            reverse("events:list"),
             reverse("events:todo"),
+            reverse("events:todo") + "?show=draft",
             reverse("events:calendar"),
+            reverse("events:day", args=[2026, 10, 20]),
             reverse("events:create"),
-            reverse("events:review_list"),
             reverse("events:detail", args=[self.draft.pk]),
             reverse("events:edit", args=[self.draft.pk]),
             reverse("reminders:notifications"),
@@ -226,14 +226,22 @@ class HomeTimelineTests(TestCase):
         self.assertEqual(row["kind"], "start_at")
         self.assertEqual(row["anchor"], start)
 
-    def test_overdue_is_listed_once_in_its_own_card(self):
+    def test_overdue_item_hands_off_from_homepage_to_todo_list(self):
         self._event("过期还没做的作业", deadline=timezone.now() - timedelta(hours=3))
         response = self.client.get(reverse("core:home"))
-        body = response.content.decode()
-        self.assertContains(response, "已过截止时间")
-        self.assertEqual(body.count("过期还没做的作业"), 1)
-        self.assertEqual(response.context["overdue"][0].title, "过期还没做的作业")
+        # 首页只说「接下来要做什么」：逾期的事不在这里单独成卡，免得常驻首屏
+        self.assertNotContains(response, "已过截止时间")
+        self.assertNotContains(response, "过期还没做的作业")
+        # 但它仍然是「未完成」，角标要算上，待办列表里也能找到
         self.assertEqual(response.context["stats"]["open_todos"], 1)
+        self.assertContains(self.client.get(reverse("events:todo")), "过期还没做的作业")
+
+    def test_empty_timeline_shows_illustration_instead_of_a_bare_line(self):
+        response = self.client.get(reverse("core:home"))
+        self.assertContains(response, "最近 7 天没有要处理的事")
+        # 空态要有画面，不能只有一行灰字（看起来像还没加载完）
+        self.assertContains(response, "empty-art")
+        self.assertContains(response, 'href="%s"' % reverse("ingest:import"))
 
     def test_done_and_cancelled_items_stay_off_the_homepage(self):
         self._event(
@@ -257,7 +265,7 @@ class ToastRenderingTests(TestCase):
 
     def test_flash_message_renders_in_floating_toast_stack(self):
         response = self.client.post(
-            reverse("events:bulk_delete"), {"next": reverse("events:list")}, follow=True
+            reverse("events:bulk_delete"), {"next": reverse("events:todo")}, follow=True
         )
         self.assertContains(response, "请先勾选要删除的事项。")
         self.assertContains(response, "data-toast-stack")

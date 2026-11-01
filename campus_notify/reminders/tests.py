@@ -23,7 +23,15 @@ class ReminderTests(TestCase):
         self.user = make_user("reminder")
         self.client.force_login(self.user)
 
-    def _event(self, deadline_text="请于10月20日前完成报名") -> Event:
+    def _event(self, deadline_text=None) -> Event:
+        """造一条未确认的草稿。
+
+        截止时间默认取「今天 + 3 天」，不写死某月某日：写死的日期一旦变成过去，
+        提醒点会被 `_remind_at_for` 钳到「现在」，断言的绝对时间必然对不上。
+        """
+        if deadline_text is None:
+            day = (timezone.localtime() + timedelta(days=3)).date()
+            deadline_text = f"请于{day.month}月{day.day}日前完成报名"
         batch, _messages, _warnings = create_batch(self.user, f"【程序设计竞赛报名】\n{deadline_text}")
         result = process_batch(batch)
         return result.drafts[0]
@@ -34,7 +42,8 @@ class ReminderTests(TestCase):
         offsets = sorted(item.offset_minutes for item in event.reminders.all())
         self.assertEqual(offsets, [120, 1440])
         reminder = event.reminders.get(offset_minutes=1440)
-        self.assertEqual(reminder.remind_at, aware(2026, 10, 19, 23, 59))
+        event.refresh_from_db()
+        self.assertEqual(reminder.remind_at, event.deadline - timedelta(minutes=1440))
         self.assertEqual(reminder.anchor_kind, Reminder.Anchor.DEADLINE)
 
     def test_no_reminder_when_anchor_missing(self):
@@ -104,12 +113,19 @@ class ReminderTests(TestCase):
         reminder.refresh_from_db()
         self.assertEqual(reminder.status, Reminder.Status.SENT)
 
-        set_fields_from_form(self.user, event, {"deadline": "2026-10-30T23:59"}, source="edit")
+        # 改成一个仍在未来的新截止时间，重排后的提醒点才能落在将来
+        new_deadline = (timezone.localtime() + timedelta(days=9)).replace(
+            hour=23, minute=59, second=0, microsecond=0
+        )
+        set_fields_from_form(
+            self.user, event, {"deadline": new_deadline.strftime("%Y-%m-%dT%H:%M")}, source="edit"
+        )
         sync_reminders(event)
         reminder.refresh_from_db()
+        event.refresh_from_db()
         self.assertEqual(reminder.status, Reminder.Status.SCHEDULED)
         self.assertIsNone(reminder.sent_at)
-        self.assertEqual(reminder.remind_at, aware(2026, 10, 29, 23, 59))
+        self.assertEqual(reminder.remind_at, event.deadline - timedelta(minutes=1440))
 
     def test_completed_todo_disables_reminders(self):
         event = self._event()
@@ -497,4 +513,36 @@ class ReminderEmailTests(TestCase):
         response = self.client.get(reverse("accounts:profile"))
         self.assertContains(response, "mail@example.edu")
         self.assertContains(response, "提醒同时发到我的邮箱")
+
+
+class NotificationPageDotTests(TestCase):
+    """通知页的未读标识：左侧红点只出现在「从没读过」的条目上。
+
+    读过的条目保留一个透明占位（`is-read`），这样所有条目的文字左边缘仍然对齐。
+    """
+
+    def setUp(self):
+        self.user = make_user("notifdot")
+        self.client.force_login(self.user)
+
+    def _notification(self, title: str, read: bool = False) -> InAppNotification:
+        return InAppNotification.objects.create(
+            owner=self.user,
+            title=title,
+            read_at=timezone.now() if read else None,
+        )
+
+    def test_unread_notification_gets_red_dot(self):
+        self._notification("还没读过")
+        html = self.client.get(reverse("reminders:notifications")).content.decode()
+        self.assertIn('class="notif-dot"', html)
+        self.assertNotIn("notif-dot is-read", html)
+        self.assertIn("未读：", html)  # 红点的语义要能被读屏软件读到
+
+    def test_read_notification_keeps_alignment_placeholder(self):
+        self._notification("已经读过", read=True)
+        html = self.client.get(reverse("reminders:notifications")).content.decode()
+        self.assertIn("notif-dot is-read", html)
+        self.assertNotIn('class="notif-dot"', html)
+        self.assertNotIn("未读：", html)
 

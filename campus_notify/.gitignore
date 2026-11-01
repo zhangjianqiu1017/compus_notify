@@ -6,3 +6,6 @@ media/
 staticfiles/
 .venv/
 venv/
+
+# 本地核对布局用的截图/静态预览
+_preview/

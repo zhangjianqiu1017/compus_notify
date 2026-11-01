@@ -1,111 +1,193 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}待办 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <h1>待办</h1>
-    <p class="sub">共 {{ events|length }} 条</p>
+    <p class="sub">
+      {% if show == "draft" %}共 {{ events|length }} 条待确认
+      {% elif show == "done" %}共 {{ events|length }} 条已完成
+      {% elif show == "all" %}共 {{ events|length }} 条
+      {% else %}共 {{ events|length }} 条未完成{% endif %}
+    </p>
   </div>
   <div class="actions">
-    <a class="btn {% if show == 'open' %}secondary{% else %}ghost{% endif %}" href="?show=open">未完成</a>
-    <a class="btn {% if show == 'done' %}secondary{% else %}ghost{% endif %}" href="?show=done">已完成</a>
-    <a class="btn {% if show == 'all' %}secondary{% else %}ghost{% endif %}" href="?show=all">全部</a>
-    <a class="btn" href="{% url 'ingest:import' %}">导入通知</a>
+    <a class="btn" href="{% url 'ingest:import' %}">{% icon "import" %}导入通知</a>
+    <a class="btn ghost" href="{% url 'events:create' %}">{% icon "plus" %}手动新建</a>
   </div>
 </div>
 
-{% if show != "open" %}
-  <div class="card">
-    <div class="card-header" style="margin-bottom:0;">
-      <div class="small muted">已完成 {{ done_count }} 条</div>
-      {% if done_count %}
-        <form method="post" action="{% url 'events:delete_completed' %}">
-          {% csrf_token %}
-          <input type="hidden" name="next" value="{{ request.get_full_path }}">
-          <button type="submit" class="btn danger-ghost small"
-                  data-confirm="删除全部 {{ done_count }} 条已完成的待办？">清空已完成</button>
-        </form>
-      {% endif %}
+{# 待确认是待办下的子栏目：识别完还没确认的草稿排在这里，确认后才进下面的待办表，这条线索常驻 #}
+<div class="card">
+  <div class="btn-row" style="flex-wrap:wrap;">
+    <a class="btn {% if show == 'draft' %}secondary{% else %}ghost{% endif %} small"
+       href="?show=draft">
+      {% icon "alert" 14 %}待确认 {{ draft_count }}
+    </a>
+    <a class="btn {% if show == 'open' %}secondary{% else %}ghost{% endif %} small"
+       href="?show=open">{% icon "clock" 14 %}未完成 {{ open_count }}</a>
+    <a class="btn {% if show == 'done' %}secondary{% else %}ghost{% endif %} small"
+       href="?show=done">{% icon "check" 14 %}已完成 {{ done_count }}</a>
+    <a class="btn {% if show == 'all' %}secondary{% else %}ghost{% endif %} small"
+       href="?show=all">{% icon "checklist" 14 %}全部 {{ total_count }}</a>
+  </div>
+  {# 原来是「事项」页的筛选（US-10）：搬进来，按分类/关键词收窄当前这一栏 #}
+  <form method="get" class="form-row" style="margin-top:12px;">
+    <input type="hidden" name="show" value="{{ show }}">
+    {% if batch_id %}<input type="hidden" name="batch" value="{{ batch_id }}">{% endif %}
+    <div class="field">
+      <label for="{{ form.q.id_for_label }}">关键词</label>
+      {{ form.q }}
     </div>
+    <div class="field">
+      <label for="{{ form.category.id_for_label }}">分类</label>
+      {{ form.category }}
+    </div>
+    <div class="field" style="display:flex;align-items:flex-end;">
+      <button class="btn ghost" type="submit">{% icon "filter" %}筛选</button>
+    </div>
+  </form>
+</div>
+
+{% if show == "draft" %}
+  {# 待确认区：一条草稿一张卡，确认按钮走原来的「确认门」——逐字段可改、能看原文证据 #}
+  {% for event in events %}
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="strong">{{ event.title }}</div>
+          <div class="small muted" style="margin-top:2px;">
+            <span class="tag muted">{{ event.get_category_display }}</span>
+            {% if event.deadline %}截止 {{ event.deadline|date:"m-d H:i" }}{% endif %}
+            {% if event.start_at %}开始 {{ event.start_at|date:"m-d H:i" }}{% endif %}
+            {% if event.location %}· {{ event.location }}{% endif %}
+          </div>
+          {% if event.review_note %}<div class="small" style="color:var(--warn)">{% icon "alert" 13 %} {{ event.review_note }}</div>{% endif %}
+        </div>
+        <div class="btn-row">
+          <a class="btn" href="{% url 'events:review' event.pk %}">{% icon "check-circle" %}核对并确认</a>
+          <a class="btn ghost" href="{% url 'events:detail' event.pk %}">{% icon "eye" %}详情</a>
+          <form method="post" action="{% url 'events:delete' event.pk %}">
+            {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <button type="submit" class="btn danger-ghost" data-confirm="删除《{{ event.title }}》？">{% icon "trash" %}删除</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  {% empty %}
+    <div class="card">
+      <div class="empty">
+        {% if keyword or category %}
+          <p>当前筛选下没有待确认的识别结果</p>
+          <a class="btn ghost" href="?show=draft">{% icon "filter" %}清除筛选</a>
+        {% else %}
+          <p>没有待确认的识别结果</p>
+          <a class="btn" href="{% url 'ingest:import' %}">{% icon "import" %}导入一条通知</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card">
+    {% if events %}
+      {# 批量删除（FR-14）原来只在事项页有，随栏目一起搬过来；行内按钮用 formaction 指到各自的端点，避免表单套表单 #}
+      <form method="post" action="{% url 'events:bulk_delete' %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <div class="table-toolbar">
+          {# 手机上表头(含「全选」)会隐藏，所以工具栏里再放一个只在窄屏显示的全选框 #}
+          <label class="select-all-mobile">
+            <input type="checkbox" data-select-all aria-label="全选">
+            <span>全选</span>
+          </label>
+          <span class="small muted" data-selected-count>未选择</span>
+          <button type="submit" class="btn danger-ghost small" data-confirm-any>{% icon "trash" 14 %}删除所选</button>
+        </div>
+
+        <div class="table-wrap">
+          {# 767px 以下这张表会拆成卡片：td 的 data-label 就是卡片上的字段名 #}
+          <table class="table-stack">
+            <thead>
+              <tr>
+                <th style="width:36px;"><input type="checkbox" data-select-all aria-label="全选"></th>
+                <th style="width:84px;">状态</th>
+                <th>事项</th>
+                <th style="width:150px;">时间</th>
+                <th style="width:96px;">分类</th>
+                <th style="width:252px;">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for event in events %}
+              <tr class="{% if event.is_closed %}is-closed{% endif %}">
+                <td class="cell-check"><input type="checkbox" name="ids" value="{{ event.pk }}" data-row-checkbox
+                           aria-label="选择《{{ event.title }}》"></td>
+                <td class="cell-status">
+                  {# 顺序有讲究：已经结束的活动说「已结束」，别退化成「已过期」——那是在催一件不用再做的事 #}
+                  {% if event.todo_status == "done" %}<span class="tag ok">已完成</span>
+                  {% elif event.is_cancelled %}<span class="tag danger">已取消</span>
+                  {% elif event.is_ended %}<span class="tag muted">已结束</span>
+                  {% elif event.overdue %}<span class="tag danger">已过期</span>
+                  {% else %}<span class="tag">进行中</span>{% endif %}
+                </td>
+                <td class="cell-title">
+                  <a class="title-link {% if event.todo_status == 'done' %}done{% endif %}"
+                     href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
+                  {% if event.is_cancelled and event.todo_status == "done" %}<span class="tag danger">已取消</span>{% endif %}
+                  {% if event.course or event.location %}
+                    <div class="small muted">
+                      {{ event.course }}{% if event.course and event.location %} · {% endif %}{{ event.location }}
+                    </div>
+                  {% endif %}
+                </td>
+                {# 截止时间不是唯一重要的时间点：活动的开始时间同样是「什么时候该去」 #}
+                <td class="small nowrap" data-label="时间">
+                  {% if event.deadline %}
+                    <span class="{% if event.overdue_kind == 'deadline' and not event.is_closed %}overdue{% endif %}">截止 {{ event.deadline|date:"m-d H:i" }}</span>
+                  {% endif %}
+                  {% if event.start_at %}
+                    {% if event.deadline %}<br>{% endif %}
+                    <span class="{% if event.overdue_kind == 'start_at' and not event.is_closed %}overdue{% endif %}">开始 {{ event.start_at|date:"m-d H:i" }}</span>
+                  {% endif %}
+                  {% if not event.deadline and not event.start_at %}<span class="muted">未填</span>{% endif %}
+                </td>
+                <td data-label="分类"><span class="tag muted">{{ event.get_category_display }}</span></td>
+                <td class="cell-actions">
+                  <div class="btn-row">
+                    {% if event.todo_status == "done" %}
+                      <button class="btn ghost small" type="submit"
+                              formaction="{% url 'events:reopen' event.pk %}">{% icon "undo" 14 %}撤销完成</button>
+                    {% else %}
+                      <button class="btn small" type="submit"
+                              formaction="{% url 'events:complete' event.pk %}">{% icon "check" 14 %}完成</button>
+                    {% endif %}
+                    <a class="btn ghost small" href="{% url 'events:edit' event.pk %}">{% icon "edit" 14 %}编辑</a>
+                    <button class="btn danger-ghost small" type="submit"
+                            formaction="{% url 'events:delete' event.pk %}"
+                            data-confirm="删除《{{ event.title }}》？">{% icon "trash" 14 %}删除</button>
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </form>
+    {% else %}
+      <div class="empty">
+        {% if keyword or category %}
+          <p>当前筛选下没有待办</p>
+          <a class="btn ghost" href="?show={{ show }}">{% icon "filter" %}清除筛选</a>
+        {% elif show == "done" %}
+          <p>还没有已完成的待办</p>
+          <a class="btn ghost" href="?show=open">{% icon "clock" %}看未完成</a>
+        {% else %}
+          <p>还没有待办</p>
+          <a class="btn" href="{% url 'ingest:import' %}">{% icon "import" %}导入一条通知</a>
+        {% endif %}
+      </div>
+    {% endif %}
   </div>
 {% endif %}
-
-<div class="card">
-  {% if events %}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="width:84px;">状态</th>
-          <th>事项</th>
-          <th style="width:150px;">时间</th>
-          <th style="width:96px;">分类</th>
-          <th style="width:210px;">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for event in events %}
-        <tr class="{% if event.is_closed %}is-closed{% endif %}">
-          <td>
-            {% if event.todo_status == "done" %}<span class="tag ok">已完成</span>
-            {% elif event.is_cancelled %}<span class="tag danger">已取消</span>
-            {% elif event.overdue %}<span class="tag danger">已过期</span>
-            {% elif event.is_ended %}<span class="tag muted">已结束</span>
-            {% else %}<span class="tag">进行中</span>{% endif %}
-          </td>
-          <td>
-            <a class="title-link {% if event.todo_status == 'done' %}done{% endif %}"
-               href="{% url 'events:detail' event.pk %}">{{ event.title }}</a>
-            {% if event.is_cancelled and event.todo_status == "done" %}<span class="tag danger">已取消</span>{% endif %}
-            {% if event.course or event.location %}
-              <div class="small muted">
-                {{ event.course }}{% if event.course and event.location %} · {% endif %}{{ event.location }}
-              </div>
-            {% endif %}
-          </td>
-          {# 截止时间不是唯一重要的时间点：活动的开始时间同样是「什么时候该去」 #}
-          <td class="small nowrap">
-            {% if event.deadline %}
-              <span class="{% if event.overdue_kind == 'deadline' and not event.is_closed %}overdue{% endif %}">截止 {{ event.deadline|date:"m-d H:i" }}</span>
-            {% endif %}
-            {% if event.start_at %}
-              {% if event.deadline %}<br>{% endif %}
-              <span class="{% if event.overdue_kind == 'start_at' and not event.is_closed %}overdue{% endif %}">开始 {{ event.start_at|date:"m-d H:i" }}</span>
-            {% endif %}
-            {% if not event.deadline and not event.start_at %}<span class="muted">未填</span>{% endif %}
-          </td>
-          <td><span class="tag muted">{{ event.get_category_display }}</span></td>
-          <td>
-            <div class="btn-row">
-              {% if event.todo_status == "done" %}
-                <form method="post" action="{% url 'events:reopen' event.pk %}">
-                  {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
-                  <button class="btn ghost small" type="submit">撤销完成</button>
-                </form>
-              {% else %}
-                <form method="post" action="{% url 'events:complete' event.pk %}">
-                  {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
-                  <button class="btn small" type="submit">完成</button>
-                </form>
-              {% endif %}
-              <a class="btn ghost small" href="{% url 'events:edit' event.pk %}">编辑</a>
-              <form method="post" action="{% url 'events:delete' event.pk %}">
-                {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
-                <button class="btn danger-ghost small" type="submit"
-                        data-confirm="删除《{{ event.title }}》？">删除</button>
-              </form>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-    <div class="empty">
-      <p>还没有待办</p>
-      <a class="btn" href="{% url 'ingest:import' %}">导入一条通知</a>
-    </div>
-  {% endif %}
-</div>
 {% endblock %}

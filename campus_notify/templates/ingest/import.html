@@ -1,13 +1,13 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}导入通知 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <h1>导入通知</h1>
-    <p class="sub">粘贴原文，自动提取时间、地点与截止日期，确认后生成待办和日程。</p>
   </div>
   <div class="actions">
-    <a class="btn ghost" href="{% url 'events:create' %}">手动新建</a>
+    <a class="btn ghost" href="{% url 'events:create' %}">{% icon "plus" %}手动新建</a>
   </div>
 </div>
 
@@ -19,31 +19,37 @@
 {% endif %}
 
 <div class="card">
-  <form method="post" data-submit-hotkey>
+  <form method="post" data-submit-hotkey
+        data-busy-title="正在识别通知内容…"
+        data-busy-tips="正在拆分消息,正在抽取时间、地点和要求,正在和已有事项比对去重,马上就好，正在整理待确认事项">
     {% csrf_token %}
-    <div class="field">
-      <label for="text">通知原文</label>
-      <textarea name="text" id="text" rows="10" placeholder="张三 2026-10-08 09:12&#10;【程序设计竞赛报名】&#10;请于10月20日前完成报名，报名链接：https://example.edu/contest&#10;&#10;张三 2026-10-08 09:15&#10;补充：报名地点改到实验楼B302">{{ prefill }}</textarea>
-    </div>
-    <div class="form-row">
-      <div class="field">
-        <label for="source">导入方式</label>
-        <select name="source" id="source">
-          <option value="paste" {% if source == "paste" %}selected{% endif %}>粘贴文字</option>
-          <option value="share" {% if source == "share" %}selected{% endif %}>系统分享</option>
-          <option value="manual" {% if source == "manual" %}selected{% endif %}>手动录入</option>
-        </select>
+    <div class="paste-panel">
+      <div class="paste-panel-head">
+        <label for="text">
+          {% icon "clipboard" %}通知原文
+        </label>
+        <span class="paste-meta">
+          <span><span data-char-count>{{ prefill|length }}</span> 字</span>
+          <span class="sep" aria-hidden="true"></span>
+          <span class="hotkey-hint">Ctrl / ⌘ + Enter 快速识别</span>
+        </span>
       </div>
+      <textarea name="text" id="text" rows="10" placeholder="把群里的通知直接粘进来，多条消息也行&#10;&#10;张三 2026-10-08 09:12&#10;【程序设计竞赛报名】&#10;请于10月20日前完成报名，报名链接：https://example.edu/contest&#10;&#10;张三 2026-10-08 09:15&#10;补充：报名地点改到实验楼B302">{{ prefill }}</textarea>
+    </div>
+    <input type="hidden" name="source" value="{{ source|default:'paste' }}">
+    <div class="form-row">
       <div class="field">
         <label for="source_label">来源（选填）</label>
         <input type="text" name="source_label" id="source_label" placeholder="软件2201班群" value="{{ source_label|default:'' }}">
       </div>
     </div>
-    <div class="form-actions">
-      <button type="submit" class="btn">开始识别</button>
-      {% if duplicates %}
-        <button type="submit" name="reuse" value="1" class="btn secondary">仍然重新识别</button>
-      {% endif %}
+    <div class="form-actions" style="justify-content:flex-end;">
+      <div class="btn-row">
+        <button type="submit" class="btn" data-loading-label="正在识别…">{% icon "sparkles" %}开始识别</button>
+        {% if duplicates %}
+          <button type="submit" name="reuse" value="1" class="btn secondary" data-loading-label="正在识别…">{% icon "refresh" %}仍然重新识别</button>
+        {% endif %}
+      </div>
     </div>
   </form>
 </div>

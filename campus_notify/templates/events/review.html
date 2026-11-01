@@ -1,17 +1,16 @@
 {% extends "base.html" %}
-{% load ui %}
+{% load ui icons %}
 {% block title %}确认识别结果 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <h1>确认识别结果</h1>
-    <p class="sub">核对无误后保存，所有字段都可以改。</p>
   </div>
 </div>
 
 {% if candidate %}
 <div class="card" style="border-color:#f2e0bf;background:#fffdf7;">
-  <h3>疑似与已有事项重复</h3>
+  <h3>{% icon "alert" %}疑似与已有事项重复</h3>
   <p class="small">{{ event.review_note }}</p>
   <div class="evidence">
     已有事项：<a href="{% url 'events:detail' candidate.pk %}" target="_blank">{{ candidate.title }}</a>
@@ -24,7 +23,7 @@
 
 {% if attention %}
 <div class="card" style="border-color:#f2e0bf;background:#fffdf7;">
-  <h3>需要人工核对</h3>
+  <h3>{% icon "alert" %}需要人工核对</h3>
   <ul class="list-plain">
     {% for item in attention %}
       <li class="small"><span class="strong">{{ item.name }}</span> · {{ item.reason }}</li>
@@ -96,7 +95,7 @@
       {{ form.requirement }}
     </div>
 
-    <h3>提醒</h3>
+    <h3>{% icon "bell" %}提醒</h3>
     <div class="checkbox-grid">
       {% for checkbox in form.reminder_offsets %}
         <label>{{ checkbox.tag }} {{ checkbox.choice_label }}</label>
@@ -105,7 +104,7 @@
     <p class="small muted">不勾选则不创建提醒。</p>
 
     {% if candidate %}
-      <h3>重复处理</h3>
+      <h3>{% icon "merge" %}重复处理</h3>
       <div class="radio-row">
         {% for radio in form.merge_choice %}
           <label>{{ radio.tag }} {{ radio.choice_label }}</label>
@@ -114,14 +113,15 @@
     {% endif %}
 
     <div class="form-actions">
-      <button type="submit" class="btn">确认并保存</button>
-      <a class="btn ghost" href="{% url 'events:list' %}">稍后再说</a>
+      <button type="submit" class="btn" data-loading-label="正在保存…">{% icon "check" %}确认并保存</button>
+      {# 不确认就先留着：这条草稿回到「待办 → 待确认」队列里，不会凭空消失 #}
+      <a class="btn ghost" href="{% url 'events:todo' %}?show=draft">{% icon "clock" %}稍后再说</a>
     </div>
   </form>
 </div>
 
 <div class="card">
-  <h3>相关原文</h3>
+  <h3>{% icon "file-text" %}相关原文</h3>
   <p class="small muted">高亮片段即该字段的识别依据。</p>
   {% for block in original_blocks %}
     <div style="margin-bottom:14px;">

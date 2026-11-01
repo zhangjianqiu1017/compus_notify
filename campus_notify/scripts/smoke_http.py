@@ -199,6 +199,15 @@ status, _body, final = post(
 )
 check("/events/review/" in final, f"导入后跳转到确认页（{final}）")
 
+# 2.5) 没确认的草稿只排在「待办 → 待确认」子栏目里，不混进待办列表
+status, draft_tab = get("/events/todo/?show=draft")
+check(
+    status == 200 and "程序设计竞赛报名" in draft_tab and "核对并确认" in draft_tab,
+    "未确认的草稿排在待办「待确认」子栏目里",
+)
+status, todo_before_confirm = get("/events/todo/")
+check("程序设计竞赛报名" not in todo_before_confirm, "未确认的草稿不进待办列表")
+
 status, review_html = get(urllib.parse.urlparse(final).path)
 check(status == 200 and "确认识别结果" in review_html, "确认页渲染成功")
 check('<mark>' in review_html and 'class="ev-label"' in review_html, "字段证据就地标在原文里（带字段名标签）")
@@ -232,6 +241,11 @@ check(status == 200 and "程序设计竞赛报名" in todo_html, "待办列表�
 
 status, calendar_html = get("/events/calendar/?year=2026&month=10")
 check(status == 200 and "程序设计竞赛报名" in calendar_html, "日历视图包含该事项")
+day_paths = re.findall(r"/events/day/\d{4}/\d{1,2}/\d{1,2}/", calendar_html)
+check(bool(day_paths), "有事的日期格子链到「当天安排」页（窄屏点格子的入口）")
+if day_paths:
+    status, day_html = get(day_paths[0])
+    check(status == 200 and "程序设计竞赛报名" in day_html, "当天安排页列出该事项")
 
 status, reminder_html = get(f"/events/{event_id}/")
 check(status == 200 and "截止前 1 天" in reminder_html, "提醒挂在事项详情页，已按默认模板创建")

@@ -6,6 +6,7 @@ import unittest
 from datetime import date, timedelta
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from events.models import Event
 from events.services import confirm_event
@@ -436,31 +437,40 @@ class PipelineTests(TestCase):
         self.assertIn(RELATION_CORRECTION, relations)
 
     def test_correction_across_batches_updates_value_and_keeps_history(self):
+        # 日期以「今天」为基准往后推，再按中文习惯写回通知里（写死日历的测试会随时间腐烂）
+        first_day = (timezone.localtime() + timedelta(days=3)).date()
+        second_day = first_day + timedelta(days=5)
         batch1, result1 = self._run(
-            "【程序设计竞赛报名】\n请于10月20日前完成报名，报名链接：https://example.edu/contest"
+            f"【程序设计竞赛报名】\n请于{first_day.month}月{first_day.day}日前完成报名，"
+            "报名链接：https://example.edu/contest"
         )
         event = result1.drafts[0]
         confirm_event(event, reminder_offsets=[1440])
         event.refresh_from_db()
-        self.assertEqual(event.deadline, aware(2026, 10, 20, 23, 59))
+        first_deadline = aware(first_day.year, first_day.month, first_day.day, 23, 59)
+        self.assertEqual(event.deadline, first_deadline)
         self.assertEqual(event.reminders.count(), 1)
         old_remind_at = event.reminders.first().remind_at
 
-        _batch2, result2 = self._run("更正：报名截止时间改为10月25日")
+        _batch2, result2 = self._run(
+            f"更正：报名截止时间改为{second_day.month}月{second_day.day}日"
+        )
         self.assertEqual(len(result2.drafts), 0)
         event.refresh_from_db()
-        self.assertEqual(event.deadline, aware(2026, 10, 25, 23, 59))
+        self.assertEqual(
+            event.deadline, aware(second_day.year, second_day.month, second_day.day, 23, 59)
+        )
 
         superseded = event.fields.filter(field=FIELD_DEADLINE, is_current=False).first()
         self.assertIsNotNone(superseded)
-        self.assertEqual(superseded.value_dt, aware(2026, 10, 20, 23, 59))
+        self.assertEqual(superseded.value_dt, first_deadline)
         self.assertEqual(superseded.superseded_by.field, FIELD_DEADLINE)
         # 旧的当前值只剩一个，保证「以哪一版为准」唯一
         self.assertEqual(event.fields.filter(field=FIELD_DEADLINE, is_current=True).count(), 1)
 
         # 延期后提醒必须重排，否则用户会被引到旧时间点
         reminder = event.reminders.first()
-        self.assertEqual(reminder.remind_at, aware(2026, 10, 24, 23, 59))
+        self.assertEqual(reminder.remind_at, event.deadline - timedelta(minutes=1440))
         self.assertNotEqual(reminder.remind_at, old_remind_at)
 
     def test_duplicate_notice_across_sources_merges(self):

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}通知 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -10,7 +11,7 @@
     <form method="post" action="{% url 'reminders:mark_all_read' %}">
       {% csrf_token %}
       <input type="hidden" name="next" value="{{ request.get_full_path }}">
-      <button class="btn ghost" type="submit">全部已读</button>
+      <button class="btn ghost" type="submit">{% icon "check-circle" %}全部已读</button>
     </form>
   </div>
 </div>
@@ -18,22 +19,26 @@
 <div class="card">
   <ul class="list-plain">
     {% for item in notifications %}
-      <li>
-        <div class="list-item-head">
-          {% if item.level == "overdue" %}<span class="tag danger">已过期</span>
-          {% elif item.level == "warn" %}<span class="tag warn">即将到期</span>
-          {% else %}<span class="tag">提醒</span>{% endif %}
-          {% if item.event %}
-            <a class="title-link" href="{% url 'events:detail' item.event.pk %}">{{ item.title }}</a>
-          {% else %}
-            <span class="title-link">{{ item.title }}</span>
-          {% endif %}
-          {% if item.unread %}<span class="tag muted">未读</span>{% endif %}
-          {% if item.email_sent_at %}<span class="tag ok">邮件已发</span>
-          {% elif item.event %}<span class="tag muted">未发邮件</span>{% endif %}
-          <span class="meta">{{ item.created_at|date:"m-d H:i" }}</span>
+      {# 左侧红点 = 还没读过；读过的只留一个透明占位，保证所有条目的文字左边缘对齐 #}
+      <li class="notif-item">
+        <span class="notif-dot{% if not item.unread %} is-read{% endif %}" aria-hidden="true"></span>
+        <div class="notif-body">
+          <div class="list-item-head">
+            {% if item.unread %}<span class="sr-only">未读：</span>{% endif %}
+            {% if item.level == "overdue" %}<span class="tag danger">已过期</span>
+            {% elif item.level == "warn" %}<span class="tag warn">即将到期</span>
+            {% else %}<span class="tag">提醒</span>{% endif %}
+            {% if item.event %}
+              <a class="title-link{% if item.unread %} is-unread{% endif %}" href="{% url 'events:detail' item.event.pk %}">{{ item.title }}</a>
+            {% else %}
+              <span class="title-link{% if item.unread %} is-unread{% endif %}">{{ item.title }}</span>
+            {% endif %}
+            {% if item.email_sent_at %}<span class="tag ok">邮件已发</span>
+            {% elif item.event %}<span class="tag muted">未发邮件</span>{% endif %}
+            <span class="meta">{{ item.created_at|date:"m-d H:i" }}</span>
+          </div>
+          {% if item.body %}<div class="small muted">{{ item.body }}</div>{% endif %}
         </div>
-        {% if item.body %}<div class="small muted">{{ item.body }}</div>{% endif %}
       </li>
     {% empty %}
       <li class="muted small">暂无通知</li>

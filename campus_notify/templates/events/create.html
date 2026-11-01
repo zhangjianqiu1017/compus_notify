@@ -1,13 +1,13 @@
 {% extends "base.html" %}
+{% load icons %}
 {% block title %}手动新建事项 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <h1>手动新建</h1>
-    <p class="sub">识别失败或通知无法复制时，直接录入。</p>
   </div>
   <div class="actions">
-    <a class="btn ghost" href="{% url 'ingest:import' %}">粘贴导入</a>
+    <a class="btn ghost" href="{% url 'ingest:import' %}">{% icon "import" %}粘贴导入</a>
   </div>
 </div>
 
@@ -67,7 +67,7 @@
       {{ form.requirement }}
     </div>
 
-    <h3>提醒</h3>
+    <h3>{% icon "bell" %}提醒</h3>
     <div class="checkbox-grid">
       {% for checkbox in form.reminder_offsets %}
         <label>{{ checkbox.tag }} {{ checkbox.choice_label }}</label>
@@ -75,8 +75,8 @@
     </div>
 
     <div class="btn-row" style="margin-top:16px;">
-      <button type="submit" class="btn">创建事项</button>
-      <a class="btn ghost" href="{% url 'ingest:import' %}">返回导入</a>
+      <button type="submit" class="btn">{% icon "plus" %}创建事项</button>
+      <a class="btn ghost" href="{% url 'ingest:import' %}">{% icon "arrow-left" %}返回导入</a>
     </div>
   </form>
 </div>

@@ -86,26 +86,24 @@ def _nearest_anchor(event, now, soon):
 
 
 def upcoming(user, *, days: int = 7, limit: int = 20) -> dict:
-    """首页数据：已过截止时间的事项 + 未来 N 天的时间轴。
+    """首页数据：未来 N 天的时间轴。
 
     确认后的事项既是待办也是日程（见 `Event.confirm`），所以首页不再拆成
     「截止 / 日程」两栏——一条事项只出现一次，按它最近的时间点排序。
+    首页只说「接下来要做什么」：已过截止时间还挂着的事归「待办」列表
+    （`events/views.py::todo_list` 仍把它排在前面），首页不再单独开一张卡，
+    否则它会一直顶在首屏，把真正的近期待办挤下去。
     """
     now = timezone.now()
     soon = now + timedelta(days=days)
-    active = (
+    window = (
         Event.objects.for_user(user)
         .filter(status=Event.Status.CONFIRMED, is_cancelled=False)
         .exclude(todo_status=Event.TodoStatus.DONE)
+        .filter(
+            Q(deadline__gte=now, deadline__lte=soon) | Q(start_at__gte=now, start_at__lte=soon)
+        )
     )
-    overdue = list(
-        active.filter(todo_status=Event.TodoStatus.PENDING, deadline__lt=now)
-        .order_by("deadline")[:limit]
-    )
-    # 已经出现在「已过截止时间」里的，时间轴上不再重复
-    window = active.filter(
-        Q(deadline__gte=now, deadline__lte=soon) | Q(start_at__gte=now, start_at__lte=soon)
-    ).exclude(pk__in=[item.pk for item in overdue])
 
     rows = []
     for event in window:
@@ -116,7 +114,7 @@ def upcoming(user, *, days: int = 7, limit: int = 20) -> dict:
             {"event": event, "kind": kind, "kind_label": TIMELINE_LABELS[kind], "anchor": anchor}
         )
     rows.sort(key=lambda row: (row["anchor"], row["kind"] != "deadline"))
-    return {"timeline": rows[:limit], "overdue": overdue, "days": days}
+    return {"timeline": rows[:limit], "days": days}
 
 
 def _ics_escape(text: str) -> str:
